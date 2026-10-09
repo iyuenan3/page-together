@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-项目已经立项，当前只有文档与 Git 骨架。以 README 的状态和真实 Git、代码、运行结果为准。
+项目已进入本地编辑器验证，有 src/lab、精确依赖与锁文件。TestWorkspace 仅供验证，不得用于生产保存层。以 README 的状态和真实 Git、代码、运行结果为准。
 
 ## 启动顺序
 
@@ -41,5 +41,5 @@
 
 ## 验证
 
-当前无应用测试或启动命令，不编造。新增代码后维护真实命令。
+本地验证使用 npm run dev；类型检查 npm run check；构建 npm run build；构建预览 npm run preview。完整能力清单与真实验证边界见 AIREADME/EDITOR_CAPABILITIES.md，不编造运行结果。
 优先验证跨浏览器同步、断线恢复、重启保存、附件权限、撤权与资源限制。

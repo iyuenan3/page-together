@@ -1,0 +1,41 @@
+:root {
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #26302d;
+  background: #f6f7f5;
+  font-synthesis: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+button { font: inherit; cursor: pointer; }
+#app { display: flex; height: 100dvh; }
+.sidebar { width: 250px; flex-shrink: 0; padding: 28px 18px; overflow: auto; border-right: 1px solid #e3e8e3; }
+.brand { font-size: 22px; font-weight: 650; letter-spacing: -0.8px; }
+.stage { font-size: 12px; color: #67756c; margin: 6px 0 24px; }
+.new-doc { background: white; border: 1px solid #d9e0d9; border-radius: 8px; padding: 10px; width: 100%; text-align: left; }
+#documents { margin-top: 16px; display: grid; gap: 5px; }
+.document { border: 0; border-radius: 6px; background: transparent; padding: 10px; text-align: left; font-size: 13px; }
+.document.active { background: #e4ebe3; }
+.lab-note { color: #64706a; font-size: 12px; line-height: 1.8; margin-top: 32px; }
+.capabilities { font-size: 11px; color: #64706a; margin-top: 20px; }
+.capabilities ul { padding-left: 16px; line-height: 1.8; }
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: white; }
+.toolbar { height: 64px; flex-shrink: 0; border-bottom: 1px solid #ecf0ec; padding: 12px 28px; display: flex; align-items: center; justify-content: space-between; }
+.mode-tabs { display: flex; gap: 4px; background: #f2f5f1; padding: 4px; border-radius: 8px; }
+.mode-tabs button { border: 0; background: transparent; padding: 5px 18px; border-radius: 6px; font-size: 13px; color: #617065; }
+.mode-tabs button[aria-pressed="true"] { background: white; color: #243b2b; box-shadow: 0 1px 3px #122b1420; }
+.version { font-size: 11px; color: #748077; }
+.work-area { flex: 1; min-height: 0; display: flex; }
+.editor-region { flex: 1; min-height: 0; min-width: 0; }
+.panel-tools { display: flex; gap: 4px; }
+.panel-tools button, .panel-heading button { border: 0; background: transparent; padding: 6px; color: #52675a; font-size: 12px; }
+.native-panel { width: 340px; flex-shrink: 0; border-left: 1px solid #e3e8e3; display: flex; flex-direction: column; overflow: hidden; }
+.native-panel[hidden] { display: none; }
+.panel-heading { height: 46px; flex-shrink: 0; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
+#panel-content { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
+page-together-editor-lab { display: block; height: 100%; }
+.affine-page-viewport { height: 100%; overflow-y: auto; overflow-x: hidden; position: relative; display: flex; flex-direction: column; container-type: inline-size; container-name: viewport; font-family: var(--affine-font-family); }
+.page-editor { display: block; flex: 1; font-family: var(--affine-font-family); }
+.affine-edgeless-viewport, .edgeless-editor-container { height: 100%; display: block; position: relative; overflow: clip; font-family: var(--affine-font-family); }
+.affine-edgeless-viewport { container-type: inline-size; container-name: viewport; }
+@media (max-width: 700px) { .sidebar { width: 180px; padding: 20px 12px; } .toolbar { padding: 12px; } .version { display: none; } }
+@media print { .sidebar, .toolbar { display: none; } #app, .affine-page-viewport, page-together-editor-lab { height: auto; overflow: visible; } }
