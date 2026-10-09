@@ -4,7 +4,7 @@
 
 BlockSuite 官方编辑器与文档模型：https://github.com/toeverything/blocksuite 。
 Yjs 官方 CRDT：https://github.com/yjs/yjs 。
-版本尚未选定，实施时记录依赖锁与第三方许可。
+本地验证基线固定 BlockSuite 0.22.4、Yjs 13.6.33，具体依赖见 package.json 与 package-lock.json；许可见 THIRD_PARTY_NOTICES.md。生产版本在完整验收后确定。
 
 ## 入向依赖
 
@@ -12,4 +12,4 @@ Yjs 官方 CRDT：https://github.com/yjs/yjs 。
 
 ## 共享底座
 
-计划复用现有北京节点的 HTTPS 入口。实际接入前核对属主配置与资源边界，不在公开仓复制服务器连接信息或现有项目秘密。
+后续使用用户已指定的既有 ECS，并计划复用其共享 HTTPS 入口。目标环境已只读核验，部署状态与接入条件见 DEPLOYMENT。实际接入前核对属主配置与资源边界，不在公开仓复制服务器连接信息或现有项目秘密。
