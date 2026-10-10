@@ -32,10 +32,10 @@ button { font: inherit; cursor: pointer; }
 .native-panel[hidden] { display: none; }
 .panel-heading { height: 46px; flex-shrink: 0; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; }
 #panel-content { flex: 1; min-height: 0; overflow: auto; padding: 8px; }
-page-together-editor-lab { display: block; height: 100%; }
+page-together-editor { display: block; height: 100%; }
 .affine-page-viewport { height: 100%; overflow-y: auto; overflow-x: hidden; position: relative; display: flex; flex-direction: column; container-type: inline-size; container-name: viewport; font-family: var(--affine-font-family); }
 .page-editor { display: block; flex: 1; font-family: var(--affine-font-family); }
 .affine-edgeless-viewport, .edgeless-editor-container { height: 100%; display: block; position: relative; overflow: clip; font-family: var(--affine-font-family); }
 .affine-edgeless-viewport { container-type: inline-size; container-name: viewport; }
 @media (max-width: 700px) { .sidebar { width: 180px; padding: 20px 12px; } .toolbar { padding: 12px; } .version { display: none; } }
-@media print { .sidebar, .toolbar { display: none; } #app, .affine-page-viewport, page-together-editor-lab { height: auto; overflow: visible; } }
+@media print { .sidebar, .toolbar { display: none; } #app, .affine-page-viewport, page-together-editor { height: auto; overflow: visible; } }

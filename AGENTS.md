@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-当前代码为 src/lab 原生编辑器内存验证壳，有精确依赖与锁文件。TestWorkspace 仅供验证，不得用于生产保存层；成员权限、服务端协同、可靠保存和离线恢复尚未实现。
+当前已有 src/app 生产工作区、server 保存与鉴权基础、shared 同步协议，以及 src/lab 原生编辑器内存验证壳。TestWorkspace 仅供验证，不得用于生产保存层。基础实现与已验证路径见 SPEC、CHANGELOG，完整产品仍待分阶段验收。
 
 产品需求已收敛，具体确认项与验收标准见 [PRD](AIREADME/PRD.md) 和 [DECISIONS](AIREADME/DECISIONS.md)。本机预览已停止，后续部署目标为既有 ECS，实际部署按用户指令执行。以真实 Git、代码与运行证据核对文档状态。
 
@@ -48,7 +48,7 @@
 
 ## 验证
 
-类型检查 npm run check；构建 npm run build。需要临时本机编辑器验证时，npm run dev 与 npm run preview 仅监听回环地址，完成后停止服务。
+类型检查 npm run check；构建 npm run build；保存、权限与恢复集成测试 npm test。服务命令和初始化见 README；本机仅作临时回环验证，完成后停止服务。原生内存验证页为 /lab.html。
 
 完整原生能力与逐项证据见 [EDITOR_CAPABILITIES](AIREADME/EDITOR_CAPABILITIES.md)，权限、离线与恢复验收见 [PRD](AIREADME/PRD.md)。分别报告类型检查、构建、浏览器操作、服务端保存和实际部署，未执行的项目保持待验收。
 

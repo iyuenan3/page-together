@@ -26,7 +26,7 @@ export default defineConfig({
     include: blockSuiteRuntimeImports(fileURLToPath(packageDirectory), sourcePackages),
     esbuildOptions: { supported: { decorators: false } },
   },
-  build: { target: 'es2022' },
-  server: { host: '127.0.0.1', strictPort: true },
+  build: { target: 'es2022', rollupOptions: { input: { main: fileURLToPath(new URL('./index.html', import.meta.url)), lab: fileURLToPath(new URL('./lab.html', import.meta.url)) } } },
+  server: { host: '127.0.0.1', strictPort: true, proxy: { '/api': { target: 'http://127.0.0.1:3000', ws: true } } },
   preview: { host: '127.0.0.1', strictPort: true },
 });

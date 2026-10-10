@@ -1,0 +1,18 @@
+.login { max-width: 560px; width: 100%; margin: 7vh auto; padding: 28px; overflow: auto; }
+.login form { display: grid; gap: 14px; margin: 24px 0; }
+label { display: grid; gap: 6px; }
+input, select, textarea { font: inherit; padding: 8px; border: 1px solid #ccd8cd; border-radius: 6px; max-width: 100%; }
+button { border: 1px solid #d2dcd2; background: white; border-radius: 6px; padding: 7px 10px; }
+button:disabled { opacity: .5; cursor: default; }
+dialog { max-width: min(720px, 92vw); border: 1px solid #d2dcd2; border-radius: 12px; padding: 24px; }
+dialog pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; background: #f1f5ef; }
+dialog button, dialog select { margin: 4px; }
+dialog textarea { display: block; width: 100%; }
+dialog > div { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+dialog > div span { min-width: 120px; }
+#management, #local-tools { display: grid; gap: 8px; margin-top: 24px; }
+#notice { font-size: 12px; line-height: 1.7; color: #935a24; overflow-wrap: anywhere; }
+#save-status { font-size: 12px; color: #617065; }
+#save-status[data-state=storage-error], #save-status[data-state=blocked] { color: #a34a26; }
+footer { padding: 8px 20px; display: flex; gap: 8px; border-top: 1px solid #ecf0ec; }
+@media print { footer { display: none; } }

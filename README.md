@@ -8,9 +8,9 @@ pageTogether 希望让受邀成员在浏览器里共同记录、整理和创作�
 
 ## 当前状态
 
-项目处于编辑器接入验证阶段。当前代码提供 BlockSuite 原生正文、画板、多文档与引用跳转，以及大纲、画框和格式面板。中文输入、撤销重做、基础表格、公式与图形文字已有真实浏览器验证。
+项目已进入生产保存与同步基础实现阶段。当前代码提供 BlockSuite 原生编辑器、自主生产工作区、邀请与离线恢复码、空间三档权限、回收站、IndexedDB 本机保存、WebSocket 增量同步、SQLite 持久化，以及附件与备份恢复接口。
 
-**当前工作区仅在内存中运行，刷新后内容会重置。** 邀请、成员权限、服务端多人同步、可靠保存和恢复尚未实现。云端部署尚未开始，后续目标为 ECS，详见 [部署状态](AIREADME/DEPLOYMENT.md)。
+**基础实现已有测试，完整产品仍待验收，尚未部署。** 原生正文已验证保存、刷新、服务中断时编辑和重开、自动重连，以及首次无缓存加载；服务端测试覆盖保存确认后进程崩溃读回、权限和恢复。两个独立浏览器、全部原生能力、远端光标、附件完整流程和容量仍待验证。后续部署目标为 ECS，详见 [部署状态](AIREADME/DEPLOYMENT.md)。
 
 ![pageTogether 编辑器验证页中的原生画板、正文与公式](docs/images/editor-lab.jpg)
 
@@ -34,18 +34,27 @@ pageTogether 希望让受邀成员在浏览器里共同记录、整理和创作�
 
 ```sh
 npm ci --ignore-scripts
-npm run dev
+npm rebuild better-sqlite3
+npm run build
+PAGETOGETHER_DATA_DIR=.local/dev-data npm run server:admin -- init '本机测试所有者'
+PAGETOGETHER_DATA_DIR=.local/dev-data PAGETOGETHER_ORIGIN=http://127.0.0.1:3000 npm run server
 ```
 
-打开终端输出的本地地址。开发与预览服务仅监听 `127.0.0.1`，按 `Ctrl+C` 停止。
+打开 `http://127.0.0.1:3000`，使用初始化输出的恢复码进入，并离线保存轮换后的新码。初始化只对新数据目录执行一次；恢复材料不写入仓库或日志。数据和验证产物在忽略目录中，服务仅监听回环地址，按 `Ctrl+C` 停止。这是临时开发验证方式，尚无已部署的服务。
+
+使用热更新时，另启 `npm run dev`，把后台的 `PAGETOGETHER_ORIGIN` 设为 `http://127.0.0.1:5173`；Vite 将 `/api` 代理到本机后台。`/lab.html` 保留独立内存验证页，刷新会重置。离线重开需使用已缓存的构建产物。
 
 | 命令 | 用途 |
 |---|---|
 | `npm run check` | 检查宿主代码与上游发布声明的类型兼容性 |
-| `npm run build` | 类型检查、构建静态产物并生成第三方许可清单 |
-| `npm run preview` | 在本机预览构建产物 |
+| `npm run build` | 类型检查、前后端构建、离线资源缓存与第三方许可清单 |
+| `npm test` | 保存确认、权限、生命周期、备份与进程崩溃恢复集成测试 |
+| `npm run dev` | 本机热更新开发，需另启后台 |
+| `npm run server` | 运行构建后的完整服务，必须配置 Origin |
+| `npm run server:admin -- backup .local/new-backup` | 备份到尚不存在的目录 |
+| `PAGETOGETHER_DATA_DIR=.local/restored npm run server:admin -- restore .local/new-backup` | 恢复到全新目录，默认暂停访问并轮换凭据 |
 
-当前基线固定为 BlockSuite 0.22.4、Yjs 13.6.33，宿主使用 TypeScript、Lit 与 Vite。`src/lab` 中的 `TestWorkspace` 仅用于编辑器验证。生产文档、网络协同和存储接口将独立实现，技术边界见 [ARCHITECTURE](AIREADME/ARCHITECTURE.md)。
+当前基线固定为 BlockSuite 0.22.4、Yjs 13.6.33，宿主使用 TypeScript、Lit 与 Vite。后台为 Node.js 22、better-sqlite3 13.0.3 和 ws 8.22.0，首版单实例、本机可靠磁盘保存；数据库提交不等于异机备份完成。`TestWorkspace` 仅用于验证页，技术边界和当前限制见 [ARCHITECTURE](AIREADME/ARCHITECTURE.md)，实际接口和保护限额见 [SPEC](AIREADME/SPEC.md)。
 
 ## 文档
 

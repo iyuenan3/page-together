@@ -9,21 +9,32 @@
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
-    "check": "node scripts/check-types.mjs",
-    "build": "npm run check && vite build && node scripts/third-party-notices.mjs",
-    "preview": "vite preview --host 127.0.0.1"
+    "check": "node scripts/check-types.mjs && tsc -p tsconfig.server.json --noEmit",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build": "npm run check && vite build && node scripts/third-party-notices.mjs && node scripts/generate-sw.mjs && npm run build:server",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "npm run build:server && node --test build/test/*.test.js",
+    "server": "node build/server/main.js",
+    "server:admin": "node build/server/admin.js"
   },
   "dependencies": {
     "@blocksuite/affine": "0.22.4",
     "@preact/signals-core": "1.14.4",
     "@toeverything/theme": "1.1.23",
+    "better-sqlite3": "13.0.3",
+    "idb": "8.0.4",
     "katex": "0.18.2",
     "lit": "3.3.3",
     "react": "18.3.1",
     "rxjs": "7.8.2",
+    "ws": "8.22.0",
+    "y-protocols": "1.0.7",
     "yjs": "13.6.33"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "22.20.5",
+    "@types/ws": "8.18.2",
     "@vanilla-extract/vite-plugin": "5.2.6",
     "typescript": "5.8.2",
     "vite": "6.4.4",
