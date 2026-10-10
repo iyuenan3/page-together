@@ -108,6 +108,7 @@ export class ProductionDoc implements Doc {
     this.sync.onAccess = member => {
       workspace.member = member;
       for (const doc of workspace.docs.values()) doc.setReadonly(!canEdit(member.role));
+      workspace.accessChanged(member);
       workspace.changed();
     };
     this.sync.onCatalog = () => void workspace.refresh().catch(error => workspace.report(error));
@@ -152,6 +153,7 @@ export class ProductionWorkspace implements Workspace {
   readonly blobs: OfflineBlobSource;
   idGenerator = () => crypto.randomUUID();
   changed = () => {};
+  accessChanged = (_member: Member) => {};
   report = (_error: unknown) => {};
   constructor(public member: Member, readonly epoch: string, records: DocumentInfo[]) {
     this.local = new LocalPersistence(member.id);

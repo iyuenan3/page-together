@@ -74,6 +74,10 @@ function recoveryMaterial(code: string) {
 function savedSession(): Session | undefined {
   try { return JSON.parse(localStorage.getItem('page-together-session') ?? 'null') ?? undefined; } catch { return undefined; }
 }
+function cacheSession(session: Session) {
+  try { localStorage.setItem('page-together-session', JSON.stringify(session)); }
+  catch { report(new Error('本机身份缓存保存失败')); }
+}
 async function exportLocal() {
   const session = savedSession();
   if (!session) throw new Error('此设备没有已记录的成员缓存');
@@ -215,9 +219,10 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   workspace?.dispose();
   workspace = new ProductionWorkspace(session.member, session.epoch, records);
   workspace.report = report;
+  workspace.accessChanged = member => cacheSession({ ...session, member });
   workspace.changed = () => { renderDocuments(); void saveStatus().catch(report); };
   workspace.cacheCatalog();
-  try { localStorage.setItem('page-together-session', JSON.stringify(session)); } catch { report(new Error('本机身份缓存保存失败')); }
+  cacheSession(session);
   root.innerHTML = `<aside class="sidebar"><div class="brand">pageTogether</div><p id="member-name"></p><button id="new-doc" class="new-doc">＋ 新建文档</button><nav id="documents" aria-label="文档"></nav><div id="management"></div><div id="local-tools"></div><p id="notice" role="alert"></p></aside><main class="main"><header class="toolbar"><div class="mode-tabs"><button id="page-mode" aria-pressed="true">正文</button><button id="edgeless-mode" aria-pressed="false">画板</button></div><div class="panel-tools"><button id="outline-panel">大纲</button><button id="frame-panel">画框</button><button id="adapter-panel">导入导出</button></div><span id="save-status" role="status">正在加载</span></header><div class="work-area"><div id="editor-region" class="editor-region"></div><aside id="panel-region" class="native-panel" hidden><div class="panel-heading"><span>原生面板</span><button id="close-panel">关闭</button></div><div id="panel-content"></div></aside></div><footer><button id="delete-doc">移入回收站</button><button id="retry-save">重试本机保存</button><button id="logout">退出空间</button></footer></main>`;
   root.querySelector('#member-name')!.textContent = session.member.nickname;
   editor = new EditorView(); root.querySelector('#editor-region')!.append(editor);
