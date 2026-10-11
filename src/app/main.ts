@@ -146,7 +146,21 @@ async function members() {
     select.value = row.role; select.disabled = row.owner || (!workspace!.member.owner && row.role === 'manage');
     line.append(name, select);
     if (!row.owner) {
-      line.append(button('保存角色', () => api('members/' + row.id, 'PATCH', { role: select.value, active: row.active })), button(row.active ? '移除' : '恢复资格', () => api('members/' + row.id, 'PATCH', { role: row.role, active: !row.active })));
+      const save = button('保存角色', () => update(select.value as Member['role'], row.active));
+      const toggle = button(row.active ? '移除' : '恢复资格', () => update(row.role, !row.active));
+      async function update(role: Member['role'], active: boolean) {
+        save.disabled = toggle.disabled = select.disabled = true;
+        try {
+          Object.assign(row, await api<Member>('members/' + row.id, 'PATCH', { role, active }));
+          name.textContent = row.nickname + (row.active ? '' : '（已移除）');
+          select.value = row.role;
+          toggle.textContent = row.active ? '移除' : '恢复资格';
+        } finally {
+          save.disabled = toggle.disabled = false;
+          select.disabled = !workspace!.member.owner && row.role === 'manage';
+        }
+      }
+      line.append(save, toggle);
       if (workspace!.member.owner) line.append(button('增加设备', () => inviteMember(row)), button('恢复身份', () => inviteMember(row, true)));
     }
     box.append(line);
