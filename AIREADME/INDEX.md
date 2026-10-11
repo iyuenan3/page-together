@@ -1,6 +1,6 @@
 # pageTogether · AIREADME
 > 给自己和朋友的共享文档与画板空间 ｜ 生命周期：active
-> last-synced: 0213acd · 2026-10-11
+> last-synced: 0e93216 · 2026-10-12
 
 ## 状态
 
@@ -15,7 +15,7 @@
 | ROADMAP | ✅ | 独立协同验证、剩余异常场景与内部试用 |
 | CONVENTIONS | ✅ | 命名、证据、公开边界与历史维护 |
 | DECISIONS | ✅ | ADR-001 至 ADR-010 |
-| MEMORY | ✅ | 编辑器接入、首次同步及降权离线缓存经验 |
+| MEMORY | ✅ | 编辑器接入、同步、离线角色与权限界面经验 |
 | CHANGELOG | ✅ | 保存同步发布与独立浏览器回归证据 |
 | EDITOR_CAPABILITIES | ⚑ | 完整静态清单与逐项运行证据 |
 
