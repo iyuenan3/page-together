@@ -13,6 +13,7 @@ import { api, RequestError } from './api';
 import { LocalPersistence } from './local';
 import { toBase64, type SaveState } from './sync';
 import { ProductionWorkspace, type ProductionDoc } from './workspace';
+import { showDrafts } from './drafts';
 import '../lab/style.css';
 import './style.css';
 
@@ -183,6 +184,18 @@ function renderDocuments() {
     item.className = 'document' + (doc === current ? ' active' : ''); return item;
   }));
 }
+function renderPresence() {
+  const target = root.querySelector('#online-members'); if (!target) return;
+  const presence = current?.sync.presence;
+  target.replaceChildren();
+  if (!presence?.connected) { target.textContent = '离线，在线状态不可用'; return; }
+  const members = presence.members(), count = document.createElement('span'); count.textContent = `此文档在线 ${members.length} 人`; target.append(count);
+  for (const member of members) {
+    const badge = document.createElement('span'); badge.className = 'online-member'; badge.textContent = member.name;
+    badge.title = member.devices > 1 ? `${member.devices} 个页面在线` : member.name;
+    badge.style.borderColor = member.color; target.append(badge);
+  }
+}
 async function saveStatus() {
   if (!workspace) return;
   const active = workspace;
@@ -190,8 +203,10 @@ async function saveStatus() {
   const visibleDocs = [...new Set([...active.docs.values(), ...current ? [current] : []])];
   const states = visibleDocs.filter(doc => doc.loaded || doc.ready || doc.sync.state !== 'loading').map(doc => doc.sync.state);
   const priority: SaveState[] = ['storage-error', 'blocked', 'syncing', 'loading', 'local', 'cloud'];
-  const state = priority.find(value => states.includes(value)) ?? 'cloud';
-  const pendingBlobs = await active.local.blobs(active.epoch, true);
+  let state = priority.find(value => states.includes(value)) ?? 'cloud';
+  let pendingBlobs: Awaited<ReturnType<LocalPersistence['blobs']>> = [];
+  try { pendingBlobs = await active.local.blobs(active.epoch, true); }
+  catch { state = 'storage-error'; }
   if (workspace !== active) return;
   const label = root.querySelector('#save-status');
   if (label) { label.textContent = labels[state] + (pendingBlobs.length ? '，有附件待上传' : ''); label.setAttribute('data-state', pendingBlobs.length && state === 'cloud' ? 'local' : state); }
@@ -203,6 +218,7 @@ async function saveStatus() {
   root.querySelector<HTMLButtonElement>('#delete-doc')!.hidden = active.member.role !== 'manage';
   root.querySelector<HTMLDivElement>('#management')!.hidden = active.member.role !== 'manage';
   root.querySelector<HTMLButtonElement>('#reopen-cloud')!.hidden = current?.sync.state !== 'blocked';
+  renderPresence();
 }
 function updatePanel() {
   if (!editor?.std || !current || !panelKind) return;
@@ -218,7 +234,9 @@ async function selectDocument(doc: ProductionDoc) {
   if (selected !== selection || !workspace) return;
   const store = doc.getStore(); store.load();
   if (!store.root) throw new Error('文档正文尚未初始化，请稍后重新打开或联系管理者');
+  if (current !== doc) current?.sync.presence?.setActive(false);
   current = doc;
+  doc.sync.presence?.setActive(true);
   root.querySelector('#empty-space')?.remove();
   store.get(FeatureFlagService).setFlag('enable_advanced_block_visibility', true);
   store.get(FeatureFlagService).setFlag('enable_callout', true);
@@ -235,11 +253,12 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   workspace?.dispose();
   workspace = new ProductionWorkspace(session.member, session.epoch, records);
   workspace.report = report;
+  workspace.presenceChanged = renderPresence;
   workspace.accessChanged = member => cacheSession({ ...session, member });
   workspace.changed = () => { renderDocuments(); void saveStatus().catch(report); };
   workspace.cacheCatalog();
   cacheSession(session);
-  root.innerHTML = `<aside class="sidebar"><div class="brand">pageTogether</div><p id="member-name"></p><button id="new-doc" class="new-doc">＋ 新建文档</button><nav id="documents" aria-label="文档"></nav><div id="management"></div><div id="local-tools"></div><p id="notice" role="alert"></p></aside><main class="main"><header class="toolbar"><div class="mode-tabs"><button id="page-mode" aria-pressed="true">正文</button><button id="edgeless-mode" aria-pressed="false">画板</button></div><div class="panel-tools"><button id="outline-panel">大纲</button><button id="frame-panel">画框</button><button id="adapter-panel">导入导出</button></div><span id="save-status" role="status">正在加载</span></header><div class="work-area"><div id="editor-region" class="editor-region"></div><aside id="panel-region" class="native-panel" hidden><div class="panel-heading"><span>原生面板</span><button id="close-panel">关闭</button></div><div id="panel-content"></div></aside></div><footer><button id="delete-doc">移入回收站</button><button id="retry-save">重试本机保存</button><button id="reopen-cloud" hidden>保留离线稿并读取云端</button><button id="logout">退出空间</button></footer></main>`;
+  root.innerHTML = `<aside class="sidebar"><div class="brand">pageTogether</div><p id="member-name"></p><div id="online-members" aria-label="当前文档在线成员" role="status"></div><button id="new-doc" class="new-doc">＋ 新建文档</button><nav id="documents" aria-label="文档"></nav><div id="management"></div><div id="local-tools"></div><p id="notice" role="alert"></p></aside><main class="main"><header class="toolbar"><div class="mode-tabs"><button id="page-mode" aria-pressed="true">正文</button><button id="edgeless-mode" aria-pressed="false">画板</button></div><div class="panel-tools"><button id="outline-panel">大纲</button><button id="frame-panel">画框</button><button id="adapter-panel">导入导出</button></div><span id="save-status" role="status">正在加载</span></header><div class="work-area"><div id="editor-region" class="editor-region"></div><aside id="panel-region" class="native-panel" hidden><div class="panel-heading"><span>原生面板</span><button id="close-panel">关闭</button></div><div id="panel-content"></div></aside></div><footer><button id="delete-doc">移入回收站</button><button id="retry-save">重试本机保存</button><button id="reopen-cloud" hidden>保留离线稿并读取云端</button><button id="logout">退出空间</button></footer></main>`;
   root.querySelector('#member-name')!.textContent = session.member.nickname;
   editor = new EditorView(); root.querySelector('#editor-region')!.append(editor);
   workspace.slots.docListUpdated.subscribe(renderDocuments);
@@ -282,9 +301,12 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
       report(new Error('旧离线稿已保留，可通过“导出本机内容与离线稿”下载；当前显示云端正文。'));
     }).catch(report);
   };
-  root.querySelector<HTMLButtonElement>('#logout')!.onclick = () => { api('logout', 'POST').then(() => { localStorage.setItem('page-together-signed-out', 'true'); showLogin('已退出空间，本机离线内容仍保留。'); }).catch(report); };
+  root.querySelector<HTMLButtonElement>('#logout')!.onclick = () => {
+    if ([...workspace!.docs.values(), ...workspace!.retired].some(doc => doc.sync.hasStorageFailure)) { report(new Error('本机保存失败，请先重试保存或导出当前修改，并保留页面')); return; }
+    api('logout', 'POST').then(() => { localStorage.setItem('page-together-signed-out', 'true'); showLogin('已退出空间，本机离线内容仍保留。'); }).catch(report);
+  };
   if (session.member.role === 'manage') root.querySelector('#management')!.append(button('邀请朋友', () => inviteMember()), button('成员管理', members), button('回收站', trash));
-  root.querySelector('#local-tools')!.append(button('导出本机内容与离线稿', exportLocal));
+  root.querySelector('#local-tools')!.append(button('查看离线稿与人工合并', () => showDrafts(workspace!, current)), button('导出本机内容与离线稿', exportLocal));
   renderDocuments();
   const first = workspace.docs.values().next().value;
   if (first) await selectDocument(first);
@@ -308,6 +330,9 @@ async function bootstrap() {
   }
 }
 window.addEventListener('pagehide', () => workspace?.dispose());
+window.addEventListener('beforeunload', event => {
+  if (workspace && [...workspace.docs.values(), ...workspace.retired].some(doc => doc.sync.hasStorageFailure)) { event.preventDefault(); event.returnValue = ''; }
+});
 window.addEventListener('online', () => { if (workspace) { void workspace.refresh().catch(report); void workspace.blobs.flush(); } });
 void bootstrap().catch(error => showLogin(errorMessage(error)));
 if (import.meta.env.PROD && 'serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js').catch(report);

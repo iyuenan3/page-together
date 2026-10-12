@@ -29,6 +29,7 @@ export class EditorView extends ShadowlessElement {
 
   setContext(store: Store, mode: DocMode) {
     if (this.store === store && this.mode === mode) return;
+    this.scope?.selection.clear();
     this.store = store;
     this.mode = mode;
     this.referenceSubscription?.unsubscribe();
@@ -87,6 +88,11 @@ export class EditorView extends ShadowlessElement {
 
   get std() {
     return this.scope;
+  }
+  override disconnectedCallback() {
+    this.scope?.selection.clearRemote();
+    this.referenceSubscription?.unsubscribe();
+    super.disconnectedCallback();
   }
 
   override updated() {

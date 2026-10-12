@@ -4,7 +4,7 @@ import { NoopLogger } from '@blocksuite/affine/global/utils';
 import {
   AwarenessStore, StoreContainer,
   type Doc, type DocMeta, type DocsPropertiesMeta, type GetStoreOptions,
-  type RemoveStoreOptions, type Store, type Workspace, type WorkspaceMeta, type YBlock,
+  type RemoveStoreOptions, type Store, Text, type Workspace, type WorkspaceMeta, type YBlock,
 } from '@blocksuite/affine/store';
 import { BlobEngine, type BlobSource } from '@blocksuite/affine/sync';
 import { Subject } from 'rxjs';
@@ -102,12 +102,15 @@ export class ProductionDoc implements Doc {
     this.rootDoc = workspace.doc;
     this.awarenessStore = new AwarenessStore(new Awareness(this.spaceDoc));
     this.awarenessStore.setLocalStateField('user', { name: workspace.member.nickname });
+    this.awarenessStore.awareness.setLocalStateField('memberId', workspace.member.id);
     this.yBlocks = this.spaceDoc.getMap('blocks');
     this.container = new StoreContainer(this);
-    this.sync = new DocumentSync(this.spaceDoc, { docId: record.id, epoch: workspace.epoch, generation: record.generation }, workspace.local, workspace.member.accessRevision);
+    this.sync = new DocumentSync(this.spaceDoc, { docId: record.id, epoch: workspace.epoch, generation: record.generation }, workspace.local, workspace.member.accessRevision, this.awarenessStore.awareness);
+    this.sync.presence!.onChange = () => workspace.presenceChanged();
     this.sync.onState = () => workspace.changed();
     this.sync.onAccess = member => {
       workspace.member = member;
+      this.sync.presence?.identity(member);
       for (const doc of workspace.docs.values()) doc.setReadonly(!canEdit(member.role));
       workspace.accessChanged(member);
       workspace.changed();
@@ -154,6 +157,7 @@ export class ProductionWorkspace implements Workspace {
   readonly blobs: OfflineBlobSource;
   idGenerator = () => crypto.randomUUID();
   changed = () => {};
+  presenceChanged = () => {};
   accessChanged = (_member: Member) => {};
   report = (_error: unknown) => {};
   constructor(public member: Member, readonly epoch: string, records: DocumentInfo[]) {
@@ -177,6 +181,26 @@ export class ProductionWorkspace implements Workspace {
     this.cacheCatalog(); this.slots.docListUpdated.next(); return doc;
   }
   getDoc(id: string) { return this.docs.get(id) ?? null; }
+  async appendDraftText(doc: ProductionDoc, text: string) {
+    if (!text.trim() || text.length > 100_000) throw new Error('请填写要合入的文字，单次最多 10 万字');
+    const session = await api<{ member: Member; epoch: string }>('session');
+    if (session.member.id !== this.member.id || session.epoch !== this.epoch || !canEdit(session.member.role)) throw new Error('请先核验当前身份和编辑权限');
+    await this.refresh();
+    if (this.docs.get(doc.id) !== doc || doc.sync.isBlocked || doc.sync.hasStorageFailure || session.member.accessRevision !== this.member.accessRevision) throw new Error('请先重试保存或保留离线稿并读取云端，再进行人工合并');
+    await doc.sync.settled();
+    await this.local.draft(doc.sync.scope, Y.encodeStateAsUpdate(doc.spaceDoc));
+    if (this.docs.get(doc.id) !== doc || doc.sync.isBlocked || doc.sync.hasStorageFailure || !canEdit(this.member.role)) throw new Error('当前权限或保存状态已变化，原稿已保留，请重新核验后合并');
+    const store = doc.getStore(); store.load();
+    if (!store.root) throw new Error('当前文档尚未加载');
+    store.captureSync();
+    store.transact(() => {
+      const note = store.root!.children.find(block => block.flavour === 'affine:note');
+      const parent = note?.id ?? store.addBlock('affine:note', {}, store.root!.id);
+      for (const line of text.split('\n')) store.addBlock('affine:paragraph', { text: new Text(line) }, parent);
+    });
+    await doc.sync.settled();
+    if (doc.sync.hasStorageFailure) throw new Error('合并内容仍在内存，请保留页面并重试本机保存或导出');
+  }
   async reopenCloud(doc: ProductionDoc) {
     await doc.sync.pause('旧稿已保留供导出，不会自动上传');
     await doc.sync.settled();

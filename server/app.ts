@@ -7,6 +7,8 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { canEdit, type ClientMessage, type DocumentScope, type Member, type Role, type ServerMessage } from '../shared/protocol.js';
 import { ApiError, identifier, requireThat, text } from './errors.js';
 import { hash, Store, type StoreOptions } from './store.js';
+import { PresenceRooms } from './presence.js';
+import { MAX_AWARENESS_BYTES } from '../shared/awareness.js';
 
 interface AppOptions extends StoreOptions {
   directory: string;
@@ -15,7 +17,7 @@ interface AppOptions extends StoreOptions {
   heartbeatMs?: number;
   maxConnections?: number;
 }
-interface Peer { sessionHash: string; member: Member; subscriptions: Map<string, DocumentScope>; alive: boolean; budget: number; reset: number }
+interface Peer { sessionHash: string; member: Member; subscriptions: Map<string, DocumentScope>; alive: boolean; budget: number; reset: number; leaving?: boolean }
 
 export function createApp(options: AppOptions) {
   const store = new Store(options.directory, options);
@@ -31,6 +33,16 @@ export function createApp(options: AppOptions) {
   requireThat(new URL(origin).protocol === 'https:' || isLocal(), 400, 'https_required');
   const cookieName = () => isLocal() ? 'pt_session' : '__Host-pt_session';
   const wss = new WebSocketServer({ noServer: true, maxPayload: Math.ceil(store.options.maxDocumentBytes * 4 / 3) + 4096, perMessageDeflate: false });
+  const presence = new PresenceRooms((scope, bytes) => {
+    for (const [ws, peer] of peers) {
+      const subscription = peer.subscriptions.get(scope.docId);
+      if (!subscription || subscription.epoch !== scope.epoch || subscription.generation !== scope.generation || !validPeer(ws, peer)) continue;
+      try {
+        store.authorizeDocument(peer.sessionHash, scope);
+        send(ws, { v: 1, type: 'awareness', ...scope, update: encode(bytes) });
+      } catch { disconnect(ws, peer, 4409, 'document_changed'); }
+    }
+  });
 
   function checkOrigin(req: IncomingMessage, required: boolean) {
     requireThat((!required && req.headers.origin === undefined) || req.headers.origin === origin, 403, 'invalid_origin');
@@ -86,18 +98,22 @@ export function createApp(options: AppOptions) {
     ws.send(JSON.stringify(message));
   }
   function validPeer(ws: WebSocket, peer: Peer): boolean {
+    if (peer.leaving) return false;
     try {
       const current = store.authenticate(peer.sessionHash);
       if (current.accessRevision !== peer.member.accessRevision) throw new ApiError(403, 'access_changed');
       return true;
-    } catch { ws.close(4403, 'access_changed'); return false; }
+    } catch { disconnect(ws, peer, 4403, 'access_changed'); return false; }
+  }
+  function disconnect(ws: WebSocket, peer: Peer, code: number, reason: string) {
+    peer.leaving = true; peer.subscriptions.clear(); presence.leave(peer); ws.close(code, reason);
   }
   function recheckConnections() {
     for (const [ws, peer] of peers) {
       if (!validPeer(ws, peer)) continue;
       for (const scope of peer.subscriptions.values()) {
         try { store.authorizeDocument(peer.sessionHash, scope); }
-        catch { ws.close(4409, 'document_changed'); break; }
+        catch { disconnect(ws, peer, 4409, 'document_changed'); break; }
       }
     }
     for (const [res, session] of downloads) {
@@ -255,12 +271,13 @@ export function createApp(options: AppOptions) {
         const peer: Peer = { sessionHash: session, member, subscriptions: new Map(), alive: true, budget: 60, reset: Date.now() + 1000 };
         peers.set(ws, peer);
         ws.on('error', () => ws.terminate());
-        ws.on('close', () => peers.delete(ws));
+        ws.on('close', () => { peers.delete(ws); presence.leave(peer); });
         ws.on('pong', () => { peer.alive = true; });
         send(ws, { v: 1, type: 'ready', epoch: store.epoch, member });
         ws.on('message', (raw, binary) => {
           let requestId: string | undefined;
           try {
+            requireThat(validPeer(ws, peer), 403, 'access_changed');
             requireThat(!binary, 400, 'json_required');
             if (Date.now() >= peer.reset) { peer.budget = 60; peer.reset = Date.now() + 1000; }
             requireThat(--peer.budget >= 0, 429, 'rate_limited');
@@ -273,6 +290,11 @@ export function createApp(options: AppOptions) {
               const result = store.pull(session, scope, decode(message.stateVector, 65536));
               peer.subscriptions.set(scope.docId, scope);
               send(ws, { v: 1, type: 'sync', requestId, ...scope, update: encode(result.update), stateVector: encode(result.stateVector), revision: result.revision });
+              send(ws, { v: 1, type: 'awareness', ...scope, update: encode(presence.snapshot(scope)) });
+            } else if (message.type === 'awareness') {
+              requireThat(peer.subscriptions.has(scope.docId), 409, 'open_required');
+              store.authorizeDocument(session, scope);
+              presence.update(scope, peer, peer.member, decode(message.update, MAX_AWARENESS_BYTES));
             } else if (message.type === 'push') {
               requireThat(peer.subscriptions.has(scope.docId), 409, 'open_required');
               const bytes = decode(message.update, store.options.maxDocumentBytes);
@@ -284,14 +306,14 @@ export function createApp(options: AppOptions) {
                 try {
                   store.authorizeDocument(otherPeer.sessionHash, scope);
                   send(other, { v: 1, type: 'update', ...scope, update: message.update, revision: saved.revision });
-                } catch { other.close(4403, 'access_changed'); }
+                } catch { disconnect(other, otherPeer, 4403, 'access_changed'); }
               }
               if (saved.titleChanged) catalogChanged();
             } else throw new ApiError(400, 'invalid_message');
           } catch (error) {
             const failure = error instanceof ApiError ? error : error instanceof SyntaxError ? new ApiError(400, 'invalid_message') : new ApiError(500, 'storage_unavailable');
             send(ws, { v: 1, type: 'error', requestId, code: failure.code });
-            if ([401, 403, 429, 503].includes(failure.status)) ws.close(4403, failure.code);
+            if ([401, 403, 429, 503].includes(failure.status)) disconnect(ws, peer, 4403, failure.code);
           }
         });
       });
@@ -318,6 +340,7 @@ export function createApp(options: AppOptions) {
     },
     async close() {
       clearInterval(heartbeat);
+      presence.close();
       for (const ws of peers.keys()) ws.terminate();
       for (const res of downloads.keys()) res.destroy();
       await new Promise<void>(resolve => wss.close(() => resolve()));

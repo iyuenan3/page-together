@@ -4,6 +4,8 @@ import { canEdit } from '../../shared/protocol.js';
 import { LocalPersistence } from './local.js';
 import { api, RequestError } from './api.js';
 import type { Member } from '../../shared/protocol.js';
+import { DocumentPresence } from './presence.js';
+import type { Awareness } from 'y-protocols/awareness.js';
 
 export type SaveState = 'loading' | 'local' | 'syncing' | 'cloud' | 'blocked' | 'storage-error';
 export class DocumentSync {
@@ -12,6 +14,7 @@ export class DocumentSync {
   private sequence: Promise<void> = Promise.resolve();
   private stopped = false;
   private blocked = false;
+  private blockedReason = '';
   private localFailed = false;
   private opened = false;
   private synchronizing = false;
@@ -27,21 +30,32 @@ export class DocumentSync {
   onState = (_state: SaveState, _reason: string) => {};
   onCatalog = () => {};
   onAccess = (_member: Member) => {};
+  readonly presence?: DocumentPresence;
   constructor(
     readonly doc: Y.Doc,
     readonly scope: DocumentScope,
     readonly local: LocalPersistence,
     private accessRevision = 0,
-  ) { this.doc.on('update', this.changed); }
+    awareness?: Awareness,
+  ) {
+    this.doc.on('update', this.changed);
+    if (awareness) this.presence = new DocumentPresence(awareness, update => {
+      if (this.opened && !this.blocked && !this.stopped && this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ v: 1, type: 'awareness', requestId: crypto.randomUUID(), ...this.scope, update: toBase64(update) }));
+    });
+  }
   private setState(state: SaveState, reason = '') {
+    if (this.localFailed && state !== 'storage-error') return;
     this.state = state; this.reason = reason; this.onState(state, reason);
+  }
+  private storageFailure(reason = '本机保存失败，请保留页面并重试或导出当前修改') {
+    this.localFailed = true; this.setState('storage-error', reason);
   }
   private changed = (update: Uint8Array, origin: unknown) => {
     if (this.stopped) return;
     if (origin !== this.remoteOrigin && !this.blocked) this.setState('syncing');
     this.sequence = this.sequence.then(() => this.local.persist(this.scope, update, origin !== this.remoteOrigin))
       .then(() => { if (!this.blocked && this.state !== 'cloud') this.setState('local'); })
-      .catch(() => { this.localFailed = true; this.setState('storage-error', '本机保存失败，请重试或导出当前修改'); });
+      .catch(() => this.storageFailure());
     void this.sequence.then(() => this.flush());
   };
   async start(waitForRemote = true) {
@@ -52,7 +66,7 @@ export class DocumentSync {
     const cached = await this.local.load(this.scope);
     if (cached) Y.applyUpdate(this.doc, cached, this.remoteOrigin);
     if (reason) {
-      this.blocked = true; this.setState('blocked', reason);
+      this.blocked = true; this.blockedReason = reason; this.setState('blocked', reason);
       if (!cached) throw new Error(reason);
       return;
     }
@@ -81,12 +95,14 @@ export class DocumentSync {
   }
   private async block(reason: string, memberWide = false) {
     this.blocked = true;
+    this.blockedReason = reason;
+    this.presence?.close(); this.socket?.close();
     this.setState('blocked', reason);
     this.failInitial(reason);
     try {
+      await this.local.block(this.scope, reason);
       await this.preserveDraft();
       if (memberWide) await this.local.blockPending(reason);
-      await this.local.block(this.scope, reason);
     }
     catch { this.localFailed = true; this.setState('storage-error', '暂停状态保存失败，请保留页面并导出当前修改'); }
   }
@@ -103,7 +119,7 @@ export class DocumentSync {
     try { await this.connectSocket(); } finally { this.connecting = false; }
   }
   private async connectSocket() {
-    if (this.stopped || this.blocked) return;
+    if (this.stopped || this.blocked || this.localFailed) return;
     try {
       const pending = await this.preserveDraft();
       const session = await api<{ member: Member; epoch: string }>('session');
@@ -137,6 +153,7 @@ export class DocumentSync {
     socket.onclose = () => {
       if (this.socket !== socket || this.stopped) return;
       this.opened = false; this.synchronizing = false;
+      this.presence?.close();
       if (this.inFlight) clearTimeout(this.inFlight.timer);
       this.inFlight = undefined;
       if (!this.blocked && !this.localFailed) {
@@ -168,6 +185,7 @@ export class DocumentSync {
       Y.applyUpdate(this.doc, fromBase64(message.update), this.remoteOrigin);
       await this.sequence;
       this.opened = true; this.retries = 0; this.initial = false;
+      this.presence?.open();
       if (this.firstSync) { clearTimeout(this.firstSync.timer); this.firstSync.resolve(); this.firstSync = undefined; }
       await this.flush();
     } else if (message.type === 'update') {
@@ -177,9 +195,12 @@ export class DocumentSync {
       const receipt = this.inFlight;
       if (!receipt || message.requestId !== receipt.requestId) return;
       if (message.updateHash !== receipt.hash || message.docId !== this.scope.docId || message.epoch !== this.scope.epoch || message.generation !== this.scope.generation) throw new Error('invalid_receipt');
-      await this.local.acknowledge(receipt.ids);
       clearTimeout(receipt.timer); this.inFlight = undefined;
+      try { await this.local.acknowledge(receipt.ids); } catch { this.storageFailure(); return; }
       await this.flush();
+    } else if (message.type === 'awareness') {
+      if (message.docId !== this.scope.docId || message.epoch !== this.scope.epoch || message.generation !== this.scope.generation) throw new Error('scope_changed');
+      if (!this.blocked) this.presence?.receive(fromBase64(message.update));
     } else if (message.type === 'error') {
       if (message.code === 'storage_unavailable' || message.code === 'space_paused') {
         socket.close(); return;
@@ -209,16 +230,34 @@ export class DocumentSync {
     finally { this.synchronizing = false; if (this.sequence !== sequence) void this.flush(); }
   }
   async retryLocalSave() {
-    if (this.blocked || this.stopped) return;
-    try {
-      if (this.localFailed) {
+    if (this.stopped) return;
+    if (this.blocked) {
+      if (!this.localFailed) return;
+      try {
+        await this.sequence;
+        await this.local.block(this.scope, this.blockedReason);
         await this.local.persist(this.scope, Y.encodeStateAsUpdate(this.doc), true);
+        await this.preserveDraft(); this.localFailed = false;
+        this.setState('blocked', this.blockedReason);
+      } catch { this.storageFailure('暂停稿仍无法保存，请保留页面并导出当前修改'); }
+      return;
+    }
+    const recovery = this.sequence.then(async () => {
+      try {
+        if (this.localFailed) await this.local.persist(this.scope, Y.encodeStateAsUpdate(this.doc), true);
         this.localFailed = false;
-      }
+      } catch { this.storageFailure('本机保存仍失败，请保留页面并导出当前修改'); }
+    });
+    this.sequence = recovery;
+    await recovery;
+    if (this.localFailed) return;
+    try {
       this.setState('local');
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) this.connect(); else await this.flush();
-    } catch { this.setState('storage-error', '本机保存仍失败，请导出当前修改'); }
+    } catch { this.storageFailure('本机保存仍失败，请保留页面并导出当前修改'); }
   }
+  get hasStorageFailure() { return this.localFailed; }
+  get isBlocked() { return this.blocked; }
   get loading() { return this.initial; }
   settled() { return this.sequence; }
   async pause(reason: string) {
@@ -230,6 +269,7 @@ export class DocumentSync {
     clearTimeout(this.timer);
     if (this.inFlight) clearTimeout(this.inFlight.timer);
     this.socket?.close();
+    this.presence?.dispose();
     this.doc.off('update', this.changed);
   }
 }

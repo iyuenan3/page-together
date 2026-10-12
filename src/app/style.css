@@ -15,4 +15,18 @@ dialog > div span { min-width: 120px; }
 #save-status { font-size: 12px; color: #617065; }
 #save-status[data-state=storage-error], #save-status[data-state=blocked] { color: #a34a26; }
 footer { padding: 8px 20px; display: flex; gap: 8px; border-top: 1px solid #ecf0ec; }
+#online-members { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 16px 0; font-size: 12px; color: #617065; }
+#online-members > span:first-child { width: 100%; }
+.online-member { padding: 3px 7px; border: 2px solid #617065; border-radius: 16px; overflow-wrap: anywhere; }
+dialog.drafts-dialog { width: min(1400px, 96vw); max-width: 96vw; height: 92dvh; max-height: 92dvh; overflow: auto; }
+.drafts-dialog > p { font-size: 13px; line-height: 1.7; }
+.drafts-dialog > .draft-controls { display: flex; align-items: center; flex-wrap: wrap; }
+.drafts-dialog > .draft-panes, .drafts-dialog > .draft-differences { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: stretch; }
+.draft-panes section { min-width: 0; height: 380px; border: 1px solid #d2dcd2; border-radius: 6px; overflow: hidden; display: flex; flex-direction: column; }
+.draft-panes h3, .draft-differences h3 { font-size: 13px; margin: 10px 12px; }
+.draft-panes page-together-editor { flex: 1; min-height: 0; }
+.draft-differences section { min-width: 0; }
+.draft-differences pre { max-height: 150px; overflow: auto; margin: 0; font-size: 12px; }
+.draft-notice { color: #935a24; }
+@media (max-width: 700px) { .drafts-dialog > .draft-panes, .drafts-dialog > .draft-differences { grid-template-columns: 1fr; } }
 @media print { footer { display: none; } }
