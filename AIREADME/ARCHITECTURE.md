@@ -44,7 +44,11 @@ HTTP、WebSocket 与附件访问共用权威成员和权限状态，成员角色
 
 宿主“添加附件”通过原生 BlobEngine 和 Store 创建附件块，原生文件入口仍保留；共享文件大小服务约束为 50 MB。正文同步在发送前检查引用的待发附件，附件保存成功后唤醒正文同步。下载先读取本机，缺失时通过鉴权接口读取并校验内容，缓存失败则保留内存原件。附件管理窗口汇集本成员各空间代际的缓存、原始副本与内存文件，明确重新提交先原子归档并重排附件，再核验保存并追加原生卡片，不应用旧正文更新。
 
-依据 ADR-015，缓存附件预览独立于正文写入，图片和媒体使用本机 Blob URL，PDF 使用浏览器阅读器，HTML 等文档按 UTF-8 纯文本显示并限制前 128 KiB。关闭预览停止媒体并释放 URL。格式或编码不支持时保留下载入口。原生图片跨成员可能没有文件名和 MIME，缓存预览仅补充 PNG、JPEG、GIF、WebP 的文件头识别，不将未知文档作为可执行内容打开。
+缓存附件预览独立于正文写入，图片和媒体使用本机 Blob URL，HTML 等文档按 UTF-8 纯文本显示并限制前 128 KiB。关闭预览停止媒体并释放 URL。格式或编码不支持时保留下载入口。原生图片跨成员可能没有文件名和 MIME，缓存预览仅补充 PNG、JPEG、GIF、WebP 的文件头识别，不将未知文档作为可执行内容打开。
+
+ADR-017 更新了 ADR-015 的 PDF 渲染方式：固定 pdfjs-dist 6.4.299，首次打开时加载同版本阅读器和 worker；CMaps、标准字体、WASM 解码器与 ICC 配置随构建保留并进入离线资源缓存。共享 PdfPreview 仅读取缓存 Blob 或同源 Blob URL，绘制当前页并提供分页及当前页文字，不运行 PDF 动作或嵌入附件中的页面。原生 AttachmentEmbedProvider 只替换 PDF render，保留原生转换、块模型、编辑与下载动作。画布像素与边长在分配前受限，加载和绘制设 30 秒截止，加密或损坏时保留原件下载；关闭或切换文档取消渲染并释放 worker。PDF.js 要求 Node.js 至少 22.13.0，未升级 BlockSuite 或 Yjs。
+
+依据 ADR-018，原生 HTML 文本匹配器仅补充行内纯空白节点折叠为一个空格，其余解析、格式和块快照沿用原生管线，代码及显式 trim 保持原处理。生产 NativeBlobEngine 将 RxJS 状态通知置于 Preact untracked 边界，避免 ResourceController 的同步订阅把消费者状态读取误记为外层 effect 依赖；数据缓存、状态流及鉴权保存规则不变。
 
 BlockSuite 0.22.4 的原生 FileDropExtension 遇到第一个接受的处理器即停止，混合图片和其他文件会漏项。宿主在完整扩展之后覆盖两类原生 drop 配置，过滤各自文件组并让混合事件继续处理；实际块创建仍复用原生回调，查看 Store 拒绝处理。适配依赖该固定版本的私有 DI 标识，升级时须复核标识、注册顺序和正文/画板行为，不混装或修改上游包。
 
@@ -60,7 +64,7 @@ BlockSuite 0.22.4 的原生 FileDropExtension 遇到第一个接受的处理器�
 
 客户端复用原生 AwarenessStore，远端正文光标、选择和画板指针由原生组件渲染。仅当前文档发布活跃状态，切换文档清空旧选择；成员列表按稳定成员 ID 去重，并提示同一成员的多个页面。断网时清除远端状态并显示在线状态不可用。实现依据见 [Yjs Awareness](https://docs.yjs.dev/api/about-awareness)。
 
-独立浏览器的正文、基础画板图形、离线重连、权限、远端状态、本机配额故障、附件上传下载、异常重提及多类预览已有行为证据。10 人和 50 MB 本机短时容量通过，固定负载及资源测量见 CAPACITY。完整原生格式往返、系统文件拖入、剪贴板组合、长期压力与 ECS 验收仍待完成，具体边界见 EDITOR_CAPABILITIES。应用资源缓存暂不自动清理旧版本，需补齐可控资源回收与存储压力验证。
+独立浏览器的正文、基础画板图形、离线重连、权限、远端状态、本机配额故障、附件上传下载、异常重提及多类预览已有行为证据。正文系统文件实际拖入、组合粘贴、原生跨块复制到正文和画板、本地 PDF 分页与断线刷新已补验，具体覆盖及剩余手势见 EDITOR_CAPABILITIES。10 人和 50 MB 本机短时容量通过，固定负载及资源测量见 CAPACITY。完整原生格式往返、长期压力与 ECS 验收仍待完成。应用资源缓存暂不自动清理旧版本，需补齐可控资源回收与存储压力验证。
 
 公开依据：[SQLite WAL](https://www.sqlite.org/wal.html)、[同步强度](https://www.sqlite.org/pragma.html#pragma_synchronous)、[better-sqlite3](https://github.com/WiseLibs/better-sqlite3/releases/tag/v13.0.3)、[ws 鉴权示例](https://github.com/websockets/ws#client-authentication)、[Yjs 更新接口](https://docs.yjs.dev/api/document-updates)。具体已实现接口和验证结果随代码同步 SPEC、CHANGELOG。
 

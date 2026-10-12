@@ -10,6 +10,8 @@
 
 JSON 请求上限 16 KiB，失败返回 HTTP 状态和 {code}，不返回内部异常。资源 ID 仅接受字母、数字、下划线和连字符。成员为 {id,nickname,role,owner,active,accessRevision}，role 为 manage/edit/view。accessRevision 从 0 开始，角色或活跃资格实际变化时递增；恢复会话不重置该值，无变化的角色保存不递增。该字段补充协议 v1 的成员信息，不能作为客户端认证凭据。
 
+应用静态模块（含 PDF worker 的 .mjs）使用 text/javascript，WASM 使用 application/wasm，并保留 X-Content-Type-Options: nosniff。静态程序和字体资源可缓存；附件内容仍经已鉴权 API 或本成员缓存读取，没有新增公开附件 URL。
+
 | 接口 | 行为与权限 |
 |---|---|
 | POST /api/auth/invite | {token,nickname}，一次兑换，签发会话 |
@@ -68,6 +70,6 @@ server:admin 支持 init、backup、restore。初始化无公网入口；备份�
 
 ## 验证边界
 
-50 项集成与回归测试覆盖增量合并、保存失败、权限、生命周期、附件、备份恢复及确认后进程崩溃读回，另覆盖本机隔离和升级、真实 IndexedDB 事务中止与确认清理失败、暂停保护、Awareness 身份绑定与离开清理、原生文本投影比较。附件回归覆盖并发入队、离线重开、版本 2 保留迁移、归档原子性、旧回执隔离、配额重试、下载校验、上传途中授权及生命周期变化、撤权中断现有下载；新增预览类型及纯文本边界、严格 UTF-8 解码、无元数据图片识别和混合 drop 分组回归。独立 Chrome 与内置 Chromium 的附件及其他行为证据见 EDITOR_CAPABILITIES。会话过期使用服务端可控时钟触发，未测试真实等待 30 天后的浏览器 Cookie 清除。本机短时容量结果见 CAPACITY；完整原生格式、系统拖入、长期压力和 ECS 容量仍待验收。此次未改变 HTTP/WebSocket 协议或默认保护限额。
+54 项集成与回归测试覆盖增量合并、保存失败、权限、生命周期、附件、备份恢复及确认后进程崩溃读回，另覆盖本机隔离和升级、真实 IndexedDB 事务中止与确认清理失败、暂停保护、Awareness 身份绑定与离开清理、原生文本投影比较。附件回归覆盖并发入队、离线重开、版本 2 保留迁移、归档原子性、旧回执隔离、配额重试、下载校验、上传途中授权及生命周期变化、撤权中断现有下载；预览回归包含类型及纯文本边界、严格 UTF-8 解码、无元数据图片识别、混合 drop 分组、PDF 画布分配边界、worker MIME、行内空白及信号订阅隔离。独立 Chrome 与内置 Chromium 的系统拖入、剪贴板和 PDF 行为证据及边界见 EDITOR_CAPABILITIES。会话过期使用服务端可控时钟触发，未测试真实等待 30 天后的浏览器 Cookie 清除。本机短时容量结果见 CAPACITY；完整原生格式、长期压力和 ECS 容量仍待验收。此次未改变身份、附件或 WebSocket 契约及默认保护限额。
 
 权限矩阵、身份恢复和离线重连的产品行为以 PRD 为准，组件与数据流见 ARCHITECTURE。
