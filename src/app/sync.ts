@@ -38,7 +38,16 @@ export class DocumentSync {
     readonly local: LocalPersistence,
     private accessRevision = 0,
     awareness?: Awareness,
+    creation?: Promise<unknown>,
   ) {
+    // Native createDefaultDoc writes immediately, before the asynchronous HTTP
+    // creation completes. Admit this fresh scope before persisting those writes.
+    if (creation) this.sequence = creation.then(() => local.checkAccess(scope, accessRevision), async () => {
+      const reason = '创建文档未完成，本机内容保留，暂停上传';
+      await local.block(scope, reason); return reason;
+    }).then(reason => {
+      if (reason) { this.blocked = true; this.blockedReason = reason; this.setState('blocked', reason); }
+    }).catch(() => this.storageFailure());
     this.doc.on('update', this.changed);
     if (awareness) this.presence = new DocumentPresence(awareness, update => {
       if (this.opened && !this.blocked && !this.stopped && this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ v: 1, type: 'awareness', requestId: crypto.randomUUID(), ...this.scope, update: toBase64(update) }));

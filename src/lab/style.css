@@ -35,6 +35,9 @@ button { font: inherit; cursor: pointer; }
 page-together-editor { display: block; height: 100%; }
 .affine-page-viewport { height: 100%; overflow-y: auto; overflow-x: hidden; position: relative; display: flex; flex-direction: column; container-type: inline-size; container-name: viewport; font-family: var(--affine-font-family); }
 .page-editor { display: block; flex: 1; font-family: var(--affine-font-family); }
+/* Native autoPlacement chooses above or below without shrinking tall menus.
+   Keep either placement inside the editor's clipped, scrolling viewport. */
+page-together-editor affine-menu { max-height: calc(50% - 24px); overflow-y: auto; }
 .affine-edgeless-viewport, .edgeless-editor-container { height: 100%; display: block; position: relative; overflow: clip; font-family: var(--affine-font-family); }
 .affine-edgeless-viewport { container-type: inline-size; container-name: viewport; }
 @media (max-width: 700px) { .sidebar { width: 180px; padding: 20px 12px; } .toolbar { padding: 12px; } .version { display: none; } }

@@ -35,6 +35,17 @@ test('module workers and PDF decoders have executable MIME types with nosniff', 
   }
 });
 
+test('native document deep links serve the application while document data remains authenticated', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'page-together-links-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, 'index.html'), '<!doctype html><title>pageTogether</title>');
+  const f = await fixture({ staticDirectory: directory }); t.after(f.close);
+  assert.equal((await fetch(f.origin + '/workspace/main/native-doc')).status, 200);
+  assert.equal(await (await fetch(f.origin + '/workspace/main/native-doc')).text(), '<!doctype html><title>pageTogether</title>');
+  assert.equal((await fetch(f.origin + '/workspace/other/native-doc')).status, 404);
+  assert.equal((await fetch(f.origin + '/api/documents')).status, 401);
+});
+
 test('single-use invitation, expiry, owner protection and current roles', async t => {
   let now = Date.now();
   const f = await fixture({ now: () => now }); t.after(f.close);

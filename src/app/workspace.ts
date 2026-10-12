@@ -14,6 +14,7 @@ import { canEdit, type DocumentInfo, type Member } from '../../shared/protocol';
 import { api } from './api';
 import { LocalPersistence, type CachedBlob } from './local';
 import { DocumentSync } from './sync';
+import { CatalogRefresh } from './catalog';
 import { OfflineBlobSource } from './blobs';
 import { NativeBlobEngine } from '../editor/blob-engine';
 import { ClipboardWhitespaceExtension } from '../editor/clipboard-extension';
@@ -67,7 +68,7 @@ export class ProductionDoc implements Doc {
     this.awarenessStore.awareness.setLocalStateField('memberId', workspace.member.id);
     this.yBlocks = this.spaceDoc.getMap('blocks');
     this.container = new StoreContainer(this);
-    this.sync = new DocumentSync(this.spaceDoc, { docId: record.id, epoch: workspace.epoch, generation: record.generation }, workspace.local, workspace.member.accessRevision, this.awarenessStore.awareness);
+    this.sync = new DocumentSync(this.spaceDoc, { docId: record.id, epoch: workspace.epoch, generation: record.generation }, workspace.local, workspace.member.accessRevision, this.awarenessStore.awareness, creation);
     this.sync.presence!.onChange = () => workspace.presenceChanged();
     this.sync.onState = () => { workspace.changed(); workspace.blobs.schedule(); };
     this.sync.onAccess = member => workspace.updateAccess(member);
@@ -105,6 +106,8 @@ export class ProductionDoc implements Doc {
 }
 
 export class ProductionWorkspace implements Workspace {
+  private pendingCreations = new Set<string>();
+  private catalog = new CatalogRefresh(() => api<DocumentInfo[]>('documents'), records => this.applyCatalog(records));
   readonly id = 'main';
   readonly doc = new Y.Doc({ guid: 'main' });
   readonly docs = new Map<string, ProductionDoc>();
@@ -137,7 +140,8 @@ export class ProductionWorkspace implements Workspace {
     if (!canEdit(this.member.role) || !navigator.onLine) throw new Error('新建文档需要联网和编辑权限');
     if (this.docs.has(id)) return this.docs.get(id)!;
     const record: DocumentInfo = { id, title: '无标题', generation: 1, revision: 0, deleted: false, createdAt: Date.now() };
-    const creation = api<DocumentInfo>('documents', 'POST', { id, title: record.title });
+    this.pendingCreations.add(id); this.catalog.invalidate();
+    const creation = api<DocumentInfo>('documents', 'POST', { id, title: record.title }).finally(() => { this.pendingCreations.delete(id); this.catalog.invalidate(); });
     const doc = this.attach(record, creation);
     this.cacheCatalog(); this.slots.docListUpdated.next(); return doc;
   }
@@ -218,24 +222,29 @@ export class ProductionWorkspace implements Workspace {
     if (this.member.role !== 'manage') throw new Error('仅管理者可以删除整篇文档');
     void api('documents/' + id + '/trash', 'POST').then(() => this.refresh()).catch(error => this.report(error));
   }
-  async refresh() {
-    const records = await api<DocumentInfo[]>('documents');
+  catalogChanged = () => {};
+  refresh() { return this.catalog.refresh(); }
+  private applyCatalog(records: DocumentInfo[]) {
+    let catalogChanged = false;
     const active = new Set(records.map(row => row.id));
-    for (const [id, doc] of this.docs) if (!active.has(id)) {
+    for (const [id, doc] of this.docs) if (!active.has(id) && !this.pendingCreations.has(id)) {
       // Retain memory and the persisted draft; stop this document's uploads.
       this.retire(doc, '文档已删除，停止同步。本机内容与离线稿仍可导出');
-      this.docs.delete(id); this.records.delete(id); this.meta.docMetaRemoved.next(id);
+      this.docs.delete(id); this.records.delete(id); this.meta.docMetaRemoved.next(id); catalogChanged = true;
     }
     for (const record of records) {
       const previous = this.records.get(record.id);
-      if (!previous) this.attach(record);
+      if (!previous) { this.attach(record); catalogChanged = true; }
+      else if (previous.generation > record.generation) continue;
       else if (previous.generation === record.generation) Object.assign(previous, record);
       else {
         this.retire(this.docs.get(record.id)!, '文档已恢复为新代际，旧离线稿保留，请从目录重新打开文档');
-        this.attach(record);
+        this.attach(record); catalogChanged = true;
       }
     }
-    this.cacheCatalog(); this.meta.docMetaUpdated.next(); this.slots.docListUpdated.next(); this.changed(); void this.blobs.flush();
+    this.cacheCatalog(); this.meta.docMetaUpdated.next(); this.slots.docListUpdated.next();
+    if (catalogChanged) this.catalogChanged();
+    this.changed(); void this.blobs.flush();
   }
   private retire(doc: ProductionDoc, reason: string) {
     doc.setReadonly(true); this.retired.add(doc);

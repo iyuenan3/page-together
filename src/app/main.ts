@@ -8,6 +8,7 @@ import '@toeverything/theme/style.css';
 import 'katex/dist/katex.min.css';
 import * as Y from 'yjs';
 import { canEdit, type DocumentInfo, type Member } from '../../shared/protocol';
+import { documentIdFromUrl } from '../../shared/document-links';
 import { EditorView } from '../editor/editor';
 import { api, RequestError } from './api';
 import { LocalPersistence } from './local';
@@ -15,6 +16,7 @@ import { toBase64, type SaveState } from './sync';
 import { ProductionWorkspace, type ProductionDoc } from './workspace';
 import { showDrafts } from './drafts';
 import { downloadAttachment, showAttachments } from './attachments';
+import { adapterMiddlewares, transferPanel } from './transfer';
 import '../lab/style.css';
 import './style.css';
 
@@ -227,7 +229,11 @@ async function saveStatus() {
 function updatePanel() {
   if (!editor?.std || !current || !panelKind) return;
   const target = root.querySelector('#panel-content')!;
-  if (panelKind === 'adapter') { const panel = new AdapterPanel(); panel.store = current.getStore(); target.replaceChildren(panel); }
+  if (panelKind === 'adapter') {
+    const panel = new AdapterPanel(); panel.store = current.getStore(); panel.transformerMiddlewares = adapterMiddlewares(workspace!, true);
+    const details = document.createElement('details'), summary = document.createElement('summary'); summary.textContent = '原生格式预览'; details.append(summary, panel);
+    target.replaceChildren(transferPanel(workspace!, current, selectDocument, editor.std), details);
+  }
   else if (panelKind === 'outline') { const panel = new OutlinePanel(); panel.editor = editor.std.host; target.replaceChildren(panel); }
   else if (mode === 'edgeless') { const panel = new FramePanel(); panel.host = editor.std.host; target.replaceChildren(panel); }
   else target.textContent = '切换到画板后查看画框。';
@@ -240,11 +246,12 @@ async function selectDocument(doc: ProductionDoc) {
   if (!store.root) throw new Error('文档正文尚未初始化，请稍后重新打开或联系管理者');
   if (current !== doc) current?.sync.presence?.setActive(false);
   current = doc;
+  if (documentIdFromUrl(location.href, location.origin) !== doc.id) history.pushState(null, '', '/?doc=' + encodeURIComponent(doc.id));
   doc.sync.presence?.setActive(true);
   root.querySelector('#empty-space')?.remove();
   store.get(FeatureFlagService).setFlag('enable_advanced_block_visibility', true);
   store.get(FeatureFlagService).setFlag('enable_callout', true);
-  editor!.setContext(store, mode); renderDocuments(); await saveStatus();
+  editor!.setContext(store, mode); renderDocuments(); updatePanel(); await saveStatus();
 }
 async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   if (session.paused) {
@@ -258,6 +265,11 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   workspace = new ProductionWorkspace(session.member, session.epoch, records);
   workspace.report = report;
   workspace.presenceChanged = renderPresence;
+  workspace.catalogChanged = () => {
+    // Native reference views cache missing/deleted targets and store instances.
+    // Rebind after catalog identity changes, retaining the same live Yjs data.
+    if (current && workspace?.getDoc(current.id) === current) editor?.setContext(current.getStore(), mode, true);
+  };
   workspace.accessChanged = member => cacheSession({ ...session, member });
   workspace.changed = () => { renderDocuments(); void saveStatus().catch(report); };
   workspace.cacheCatalog();
@@ -284,7 +296,7 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
     if (current) editor!.setContext(current.getStore(), mode);
   };
   editor.addEventListener('mode-change', event => { mode = (event as CustomEvent<DocMode>).detail; if (current) editor!.setContext(current.getStore(), mode); });
-  editor.addEventListener('doc-change', event => { const doc = workspace!.getDoc((event as CustomEvent<string>).detail); if (doc) void selectDocument(doc).catch(report); });
+  editor.addEventListener('doc-change', event => { const doc = workspace!.getDoc((event as CustomEvent<string>).detail); if (doc) void selectDocument(doc).catch(report); else report(new Error('引用文档已删除或当前无法访问')); });
   editor.addEventListener('context-ready', updatePanel);
   for (const kind of ['outline', 'frame', 'adapter'] as const) root.querySelector<HTMLButtonElement>('#' + kind + '-panel')!.onclick = () => { panelKind = kind; root.querySelector<HTMLDivElement>('#panel-region')!.hidden = false; updatePanel(); };
   root.querySelector<HTMLButtonElement>('#close-panel')!.onclick = () => { panelKind = undefined; root.querySelector<HTMLDivElement>('#panel-region')!.hidden = true; root.querySelector('#panel-content')!.replaceChildren(); };
@@ -321,9 +333,10 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   if (session.member.role === 'manage') root.querySelector('#management')!.append(button('邀请朋友', () => inviteMember()), button('成员管理', members), button('回收站', trash));
   root.querySelector('#local-tools')!.append(button('附件与离线缓存', () => showAttachments(workspace!, current)), button('查看离线稿与人工合并', () => showDrafts(workspace!, current)), button('导出本机内容与离线稿', exportLocal));
   renderDocuments();
-  const first = workspace.docs.values().next().value;
+  const requested = documentIdFromUrl(location.href, location.origin);
+  const first = requested ? workspace.getDoc(requested) : workspace.docs.values().next().value;
   if (first) await selectDocument(first);
-  else { const empty = document.createElement('p'); empty.id = 'empty-space'; empty.textContent = '空间中还没有文档。'; root.querySelector('#editor-region')!.append(empty); }
+  else { const empty = document.createElement('p'); empty.id = 'empty-space'; empty.textContent = requested ? '引用的文档不存在或已移入回收站，请选择其他文档。' : '空间中还没有文档。'; root.querySelector('#editor-region')!.append(empty); }
   void workspace.blobs.flush(); await saveStatus();
 }
 async function bootstrap() {
@@ -347,5 +360,10 @@ window.addEventListener('beforeunload', event => {
   if (workspace && (workspace.blobs.hasStorageFailure || [...workspace.docs.values(), ...workspace.retired].some(doc => doc.sync.hasStorageFailure))) { event.preventDefault(); event.returnValue = ''; }
 });
 window.addEventListener('online', () => { if (workspace) { void workspace.refresh().catch(report); void workspace.blobs.flush(); } });
+window.addEventListener('popstate', () => {
+  const id = documentIdFromUrl(location.href, location.origin), doc = id && workspace?.getDoc(id);
+  if (doc) void selectDocument(doc).catch(report);
+  else if (id) report(new Error('引用的文档不存在或已移入回收站'));
+});
 void bootstrap().catch(error => showLogin(errorMessage(error)));
 if (import.meta.env.PROD && 'serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js').catch(report);

@@ -190,7 +190,7 @@ export function createApp(options: AppOptions) {
     if (!path.startsWith('/api/')) {
       requireThat(req.method === 'GET' && options.staticDirectory, 404, 'not_found');
       const root = resolve(options.staticDirectory);
-      const relative = path === '/' ? 'index.html' : decodeURIComponent(path).slice(1);
+      const relative = path === '/' || /^\/workspace\/main\/[^/]+$/.test(path) ? 'index.html' : decodeURIComponent(path).slice(1);
       const file = resolve(root, relative);
       requireThat(file.startsWith(root + sep) && statSync(file, { throwIfNoEntry: false })?.isFile(), 404, 'not_found');
       const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.woff2': 'font/woff2', '.jpg': 'image/jpeg', '.png': 'image/png', '.txt': 'text/plain' };

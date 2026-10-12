@@ -17,6 +17,7 @@ import { html } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { Subscription } from 'rxjs';
 import { MAX_ATTACHMENT_BYTES } from '../../shared/attachments';
+import { documentIdFromUrl } from '../../shared/document-links';
 import { CompleteFileDropExtension } from './file-drop-extension';
 import { PdfEmbedExtension } from './pdf-embed-extension';
 
@@ -31,8 +32,8 @@ export class EditorView extends ShadowlessElement {
   private scope?: BlockStdScope;
   private referenceSubscription?: Subscription;
 
-  setContext(store: Store, mode: DocMode) {
-    if (this.store === store && this.mode === mode) return;
+  setContext(store: Store, mode: DocMode, refreshReferences = false) {
+    if (this.store === store && this.mode === mode && !refreshReferences) return;
     this.scope?.selection.clear();
     this.store = store;
     this.mode = mode;
@@ -47,15 +48,8 @@ export class EditorView extends ShadowlessElement {
       EditorSettingExtension({ setting$: signal({}) }),
       ParseDocUrlExtension({
         parseDocUrl: url => {
-          try {
-            const target = new URL(url, location.href);
-            const docId = target.searchParams.get('doc');
-            return target.origin === location.origin && docId
-              ? { docId }
-              : undefined;
-          } catch {
-            return undefined;
-          }
+          const docId = documentIdFromUrl(url, location.origin);
+          return docId ? { docId } : undefined;
         },
       }),
       DocModeExtension({
