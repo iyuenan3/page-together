@@ -34,7 +34,7 @@ JSON 请求上限 16 KiB，失败返回 HTTP 状态和 {code}，不返回内部�
 
 ## WebSocket 同步与保存确认
 
-/api/sync 复用会话和 Origin。ready 返回当前 member 和空间 epoch。每个 open/push 均包含 {v:1,requestId,docId,epoch,generation}，并在操作时核验当前成员及生命周期。
+/api/sync 复用会话和 Origin。ready 返回当前 member 和空间 epoch。每个 open/push/awareness 均包含 {v:1,requestId,docId,epoch,generation}，并在操作时核验当前成员及生命周期。
 
 - open 带 stateVector，sync 返回缺少的 update、服务端 stateVector 和 revision。
 - push 带 update，必须已 open；服务端在 SQLite 同步事务内校验、保存并推进 revision。
@@ -44,7 +44,13 @@ JSON 请求上限 16 KiB，失败返回 HTTP 状态和 {code}，不返回内部�
 
 权限版本或会话失效关闭连接，文档删除或代际改变关闭旧订阅。典型错误为 session_expired、read_only、space_epoch_changed、document_deleted、document_generation_changed、storage_unavailable；客户端保留离线稿，网络或存储服务故障重试，身份或生命周期异常暂停上传。暂停跨刷新及身份恢复生效；有待发修改且授权版本变化或缺失时不自动上传，即使当前角色已恢复编辑。
 
-Awareness 暂未进行网络传输。当前每个已打开文档持有独立连接，连接数保护不能解释为已通过 10 人多文档容量验收。
+awareness 的 update 为标准 Awareness 二进制的 Base64，客户端单次仅提交自身一条状态，解码上限 16 KiB；须先 open 相同文档作用域。服务端将客户端 ID 绑定到该连接，拒绝覆盖其他连接的 ID，昵称、成员 ID、角色和颜色由服务端生成。仅保留本版本的原生 text/block/image/cursor/surface 选择结构，限制条目和字段大小。查看成员可发送获准的远端状态，不能借此写正文。
+
+open 后返回该房间已有状态；临时状态变化和离开均向当前获准订阅者广播同作用域 awareness。撤权、会话失效或文档代际变化清除该连接状态。Awareness 不产生 saved、修订号或数据库写入，不代表正文已保存。当前文档在线人数按成员去重，多个页面另行提示；切换文档退出原文档活跃状态，离线不显示过时人数。
+
+本机正文写入或待发确认清理失败时持续显示保存失败，保留内存并暂停上传；明确重试先保存完整内存快照，再恢复获准的同步。异常暂停与存储失败分别保存状态，重试存储不能解除异常授权暂停。离线稿只读对照不修改源数据；人工追加使用当前已核验的编辑身份和文档代际，先保存目标快照，再添加用户确认的文字，不能直接应用整个旧 Yjs 更新或覆盖当前文档。
+
+当前每个已打开文档持有独立连接，连接数保护不能解释为已通过 10 人多文档容量验收。
 
 ## 保存、备份和资源边界
 
@@ -56,6 +62,6 @@ server:admin 支持 init、backup、restore。初始化无公网入口；备份�
 
 ## 验证边界
 
-集成测试覆盖独立会话的增量合并、失败提交、重试、权限、生命周期、附件与备份恢复，以及保存确认后 SIGKILL 并以新进程读回。另覆盖真实 HTTP 会话过期后的客户端暂停、授权历史变化、本机隔离事务和 IndexedDB 升级。独立 Chrome 与内置 Chromium 的协同、异常离线稿、旧备份恢复及正常重连回归见 EDITOR_CAPABILITIES。过期使用服务端可控时钟触发，验证服务端过期核验；未测试真实等待 30 天后的浏览器 Cookie 清除。远端选择、本机保存失败注入、完整原生格式和正式容量仍待验收。
+29 项集成与回归测试覆盖增量合并、保存失败、权限、生命周期、附件、备份恢复及确认后进程崩溃读回，另覆盖本机隔离和升级、真实 IndexedDB 事务中止与确认清理失败、暂停保护、Awareness 身份绑定与离开清理、原生文本投影比较。独立 Chrome 与内置 Chromium 的协同、异常稿、远端选择、实际配额故障与人工追加证据见 EDITOR_CAPABILITIES。会话过期使用服务端可控时钟触发，未测试真实等待 30 天后的浏览器 Cookie 清除。完整原生格式、附件浏览器流程和正式容量仍待验收。
 
 权限矩阵、身份恢复和离线重连的产品行为以 PRD 为准，组件与数据流见 ARCHITECTURE。

@@ -42,7 +42,17 @@ HTTP、WebSocket 与附件访问共用权威成员和权限状态，成员角色
 
 本机回归使用 fake-indexeddb 6.2.5 测试实际持久层代码，另由真实 HTTP 过期测试驱动 DocumentSync；该依赖仅用于开发测试。浏览器持久保存与恢复效果仍以独立浏览器操作和实际导出文件为证据。
 
-Awareness 当前仅保留本机状态，远端光标和在线成员传输待实现。独立双浏览器的正文、基础画板图形、离线重连和降权已有行为证据，具体边界见 EDITOR_CAPABILITIES；原生全部格式往返、附件浏览器流程、本机存储失败注入和真实容量仍待验收。应用资源缓存暂不自动清理旧版本，需补齐可控资源回收与存储压力验证。
+本机写入或保存确认清理失败后，DocumentSync 持续标记存储失败并停止发送待发正文。后续编辑保留在内存，不能用同步、云端或异常暂停状态覆盖失败提示；退出和关闭页面提示保留未落盘内容。明确重试时先保存完整内存快照，再继续核验与同步；已经暂停的稿件继续受暂停保护。IndexedDB 事务完成 Promise 在创建时即观察失败，避免请求先拒绝时产生未处理的事务拒绝。
+
+离线稿窗口汇集本成员的保留稿、设备缓存、旧代际及当前与隔离后的内存稿。每侧通过独立 SnapshotDoc、完整原生扩展和只读 Store 渲染正文或画板，预览没有网络同步和附件写入通路，附件只读本机已缓存副本。文字差异仅提取原生文本并比较行的出现次数，不改写完整 Yjs 快照。人工追加前核验当前会话、权限、代际、文档目录和保存状态，先保留当前完整稿，再通过原生 Store 添加用户确认的文字段落，原稿不变；图形和格式的语义合并不在此入口内，见 ADR-013。
+
+## 在线成员与远端选择
+
+依据 ADR-012，原生 Awareness 通过同一鉴权 WebSocket 的独立消息传输，保持 y-protocols 1.0.7 的二进制时钟和 selectionV2 结构。lib0 0.2.119 从同一安装图显式声明，用于验证和重编码；上游版本未升级。服务端 PresenceRooms 按空间代际、文档代际及文档 ID 管理临时房间，绑定连接所拥有的客户端 ID，并用已认证成员覆盖昵称、成员标识、角色和颜色。每次收发复核资格，断开、撤权或生命周期变化时移除远端状态；临时状态不进入 SQLite 或正文修订号。
+
+客户端复用原生 AwarenessStore，远端正文光标、选择和画板指针由原生组件渲染。仅当前文档发布活跃状态，切换文档清空旧选择；成员列表按稳定成员 ID 去重，并提示同一成员的多个页面。断网时清除远端状态并显示在线状态不可用。实现依据见 [Yjs Awareness](https://docs.yjs.dev/api/about-awareness)。
+
+独立双浏览器的正文、基础画板图形、离线重连、权限、远端状态及本机配额故障已有行为证据，具体边界见 EDITOR_CAPABILITIES；原生全部格式往返、附件浏览器流程和真实容量仍待验收。应用资源缓存暂不自动清理旧版本，需补齐可控资源回收与存储压力验证。
 
 公开依据：[SQLite WAL](https://www.sqlite.org/wal.html)、[同步强度](https://www.sqlite.org/pragma.html#pragma_synchronous)、[better-sqlite3](https://github.com/WiseLibs/better-sqlite3/releases/tag/v13.0.3)、[ws 鉴权示例](https://github.com/websockets/ws#client-authentication)、[Yjs 更新接口](https://docs.yjs.dev/api/document-updates)。具体已实现接口和验证结果随代码同步 SPEC、CHANGELOG。
 
