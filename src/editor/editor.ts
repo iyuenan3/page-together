@@ -18,6 +18,7 @@ import { keyed } from 'lit/directives/keyed.js';
 import { Subscription } from 'rxjs';
 import { MAX_ATTACHMENT_BYTES } from '../../shared/attachments';
 import { CompleteFileDropExtension } from './file-drop-extension';
+import { PdfEmbedExtension } from './pdf-embed-extension';
 
 const viewManager = new ViewExtensionManager(getInternalViewExtensions());
 const primaryModes = new Map<string, DocMode>();
@@ -79,7 +80,7 @@ export class EditorView extends ShadowlessElement {
     ];
     this.scope = new BlockStdScope({
       store,
-      extensions: [...viewManager.get(mode), ...common, CompleteFileDropExtension],
+      extensions: [...viewManager.get(mode), ...common, CompleteFileDropExtension, PdfEmbedExtension],
     });
     this.scope.get(FileSizeLimitProvider).maxFileSize = MAX_ATTACHMENT_BYTES;
     this.referenceSubscription = this.scope

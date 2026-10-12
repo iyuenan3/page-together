@@ -4,6 +4,7 @@ import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
 import { defineConfig } from 'vite';
 import wasm from 'vite-plugin-wasm';
 import { blockSuiteRuntimeImports } from './scripts/blocksuite-runtime-imports.mjs';
+import { pdfAssets } from './scripts/pdf-assets.mjs';
 
 const packageDirectory = new URL('./node_modules/@blocksuite/', import.meta.url);
 const sourcePackages = readdirSync(packageDirectory).filter(name => {
@@ -14,7 +15,7 @@ const sourcePackages = readdirSync(packageDirectory).filter(name => {
 });
 
 export default defineConfig({
-  plugins: [wasm(), vanillaExtractPlugin()],
+  plugins: [wasm(), vanillaExtractPlugin(), pdfAssets()],
   resolve: { dedupe: ['yjs', 'lit', '@preact/signals-core'] },
   esbuild: { target: 'es2022' },
   // The WASM plugin sets the optimizer target to esnext. Browsers still need

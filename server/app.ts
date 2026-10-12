@@ -193,7 +193,7 @@ export function createApp(options: AppOptions) {
       const relative = path === '/' ? 'index.html' : decodeURIComponent(path).slice(1);
       const file = resolve(root, relative);
       requireThat(file.startsWith(root + sep) && statSync(file, { throwIfNoEntry: false })?.isFile(), 404, 'not_found');
-      const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.woff2': 'font/woff2', '.jpg': 'image/jpeg', '.png': 'image/png', '.txt': 'text/plain' };
+      const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.wasm': 'application/wasm', '.woff2': 'font/woff2', '.jpg': 'image/jpeg', '.png': 'image/png', '.txt': 'text/plain' };
       res.setHeader('Content-Type', mime[extname(file)] ?? 'application/octet-stream');
       res.setHeader('Cache-Control', 'no-cache');
       createReadStream(file).on('error', () => res.destroy()).pipe(res);

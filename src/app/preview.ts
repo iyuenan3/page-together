@@ -2,6 +2,7 @@ import { AwarenessStore, StoreContainer, type Doc, type GetStoreOptions, type Re
 import { getInternalStoreExtensions } from '@blocksuite/affine/extensions/store';
 import { StoreExtensionManager } from '@blocksuite/affine/ext-loader';
 import { BlobEngine } from '@blocksuite/affine/sync';
+import { ClipboardWhitespaceExtension } from '../editor/clipboard-extension';
 import { NoopLogger } from '@blocksuite/affine/global/utils';
 import { Awareness } from 'y-protocols/awareness.js';
 import * as Y from 'yjs';
@@ -41,7 +42,7 @@ export class SnapshotDoc implements Doc {
   }
   load() {}
   getStore(options: GetStoreOptions = {}) {
-    const store = this.container.getStore({ ...options, id: this.id, readonly: true, extensions: new StoreExtensionManager(getInternalStoreExtensions()).get('store') });
+    const store = this.container.getStore({ ...options, id: this.id, readonly: true, extensions: [...new StoreExtensionManager(getInternalStoreExtensions()).get('store'), ClipboardWhitespaceExtension] });
     this.stores.add(store); return store;
   }
   removeStore(options: RemoveStoreOptions) { this.container.removeStore(options); }

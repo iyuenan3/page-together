@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
 const notices = [
-  'Third-party components used by the pageTogether editor lab.',
+  'Third-party components used by pageTogether.',
   'This inventory includes installed runtime dependencies and may include components removed by tree shaking.',
   'Project-authored code is MIT; this does not replace third-party licenses.',
   'BlockSuite package manifests declare MIT; the upstream repository also retains MPL-2.0 material.',
@@ -26,8 +26,17 @@ for (const [packagePath, dependency] of Object.entries(lock.packages)) {
     `Manifest license: ${typeof manifest.license === 'string' ? manifest.license : 'see included license or source package'}`
   );
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (entry.isFile() && /^(licen[sc]e|copying|notice)([.-].*)?$/i.test(entry.name)) {
+    if (entry.isFile() && /^(licen[sc]e|copying|notice)([._-].*)?$/i.test(entry.name)) {
       notices.push(`\n${entry.name}\n`, readFileSync(join(directory, entry.name), 'utf8'));
+    }
+  }
+  if (manifest.name === 'pdfjs-dist') {
+    for (const category of ['cmaps', 'standard_fonts', 'wasm', 'iccs']) {
+      for (const entry of readdirSync(join(directory, category), { withFileTypes: true })) {
+        if (entry.isFile() && /^(licen[sc]e|copying|notice)([._-].*)?$/i.test(entry.name)) {
+          notices.push(`\n${category}/${entry.name}\n`, readFileSync(join(directory, category, entry.name), 'utf8'));
+        }
+      }
     }
   }
   count++;

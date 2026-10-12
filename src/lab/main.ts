@@ -11,14 +11,15 @@ import type { DocMode } from '@blocksuite/affine/model';
 import '@toeverything/theme/style.css';
 import 'katex/dist/katex.min.css';
 import { EditorLab } from './editor';
+import { ClipboardWhitespaceExtension } from '../editor/clipboard-extension';
 import './style.css';
 
 // This upstream test utility belongs only to the lab. Production must implement
 // Workspace/Doc with authenticated sources and verified durable restoration.
 const workspace = new TestWorkspace();
-workspace.storeExtensions = new StoreExtensionManager(
+workspace.storeExtensions = [...new StoreExtensionManager(
   getInternalStoreExtensions()
-).get('store');
+).get('store'), ClipboardWhitespaceExtension];
 workspace.meta.initialize();
 workspace.start();
 

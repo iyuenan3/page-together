@@ -15,6 +15,8 @@ import { api } from './api';
 import { LocalPersistence, type CachedBlob } from './local';
 import { DocumentSync } from './sync';
 import { OfflineBlobSource } from './blobs';
+import { NativeBlobEngine } from '../editor/blob-engine';
+import { ClipboardWhitespaceExtension } from '../editor/clipboard-extension';
 
 class WorkspaceMetaAdapter implements WorkspaceMeta {
   docMetaAdded = new Subject<string>();
@@ -110,7 +112,7 @@ export class ProductionWorkspace implements Workspace {
   readonly records = new Map<string, DocumentInfo>();
   readonly slots = { docListUpdated: new Subject<void>() };
   readonly meta: WorkspaceMetaAdapter;
-  readonly extensions = new StoreExtensionManager(getInternalStoreExtensions()).get('store');
+  readonly extensions = [...new StoreExtensionManager(getInternalStoreExtensions()).get('store'), ClipboardWhitespaceExtension];
   readonly local: LocalPersistence;
   readonly blobSync: BlobEngine;
   readonly blobs: OfflineBlobSource;
@@ -123,7 +125,7 @@ export class ProductionWorkspace implements Workspace {
     this.local = new LocalPersistence(member.id);
     this.meta = new WorkspaceMetaAdapter(this);
     this.blobs = new OfflineBlobSource(this);
-    this.blobSync = new BlobEngine(this.blobs, [], new NoopLogger());
+    this.blobSync = new NativeBlobEngine(this.blobs, [], new NoopLogger());
     for (const record of records) this.attach(record);
   }
   private attach(record: DocumentInfo, creation?: Promise<unknown>) {

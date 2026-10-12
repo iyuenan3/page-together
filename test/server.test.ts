@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +19,21 @@ async function open(peer: Peer, scope: { docId: string; epoch: string; generatio
   Y.applyUpdate(doc, Buffer.from(sync.update, 'base64'));
   return doc;
 }
+
+test('module workers and PDF decoders have executable MIME types with nosniff', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'page-together-static-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await writeFile(join(directory, 'worker.mjs'), 'self.onmessage = () => {};');
+  await writeFile(join(directory, 'decoder.wasm'), Uint8Array.of(0, 97, 115, 109));
+  const f = await fixture({ staticDirectory: directory }); t.after(f.close);
+  for (const [path, mime] of [['worker.mjs', 'text/javascript'], ['decoder.wasm', 'application/wasm']]) {
+    const response = await fetch(`${f.origin}/${path}`);
+    assert.equal(response.status, 200);
+    assert(response.headers.get('content-type')?.startsWith(mime));
+    assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
+    assert((await response.arrayBuffer()).byteLength > 0);
+  }
+});
 
 test('single-use invitation, expiry, owner protection and current roles', async t => {
   let now = Date.now();
