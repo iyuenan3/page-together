@@ -18,6 +18,7 @@
 - 接手与产品边界：[CORE](AIREADME/CORE.md)、[PRD](AIREADME/PRD.md)、[ROADMAP](AIREADME/ROADMAP.md)。
 - 编辑器接入：[ARCHITECTURE](AIREADME/ARCHITECTURE.md)、[EDITOR_CAPABILITIES](AIREADME/EDITOR_CAPABILITIES.md)、[CONVENTIONS](AIREADME/CONVENTIONS.md)。
 - 权限、身份、离线重连与保存：[PRD](AIREADME/PRD.md)、[ARCHITECTURE](AIREADME/ARCHITECTURE.md)、[SPEC](AIREADME/SPEC.md)。
+- 容量与资源限额：[CAPACITY](AIREADME/CAPACITY.md)、[SPEC](AIREADME/SPEC.md)。
 - 重大取舍与排坑：[DECISIONS](AIREADME/DECISIONS.md)、[MEMORY](AIREADME/MEMORY.md)。
 - 部署与外部关系：[DEPLOYMENT](AIREADME/DEPLOYMENT.md)、[RELATIONS](AIREADME/RELATIONS.md)。
 - 里程碑与已有证据：[CHANGELOG](AIREADME/CHANGELOG.md)、[EDITOR_CAPABILITIES](AIREADME/EDITOR_CAPABILITIES.md)。
@@ -49,6 +50,8 @@
 ## 验证
 
 类型检查 npm run check；构建 npm run build；保存、权限与恢复集成测试 npm test。服务命令和初始化见 README；本机仅作临时回环验证，完成后停止服务。原生内存验证页为 /lab.html。
+
+独立容量验证 npm run test:capacity，负载与阈值先固定，服务资源在独立子进程测量，结果边界见 CAPACITY。本机短时通过不能替代 ECS、广域网、长时间压力或全部原生能力验收。
 
 完整原生能力与逐项证据见 [EDITOR_CAPABILITIES](AIREADME/EDITOR_CAPABILITIES.md)，权限、离线与恢复验收见 [PRD](AIREADME/PRD.md)。分别报告类型检查、构建、浏览器操作、服务端保存和实际部署，未执行的项目保持待验收。
 

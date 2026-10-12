@@ -1,5 +1,6 @@
 import { canEdit } from '../../shared/protocol';
 import { attachmentError } from './blobs';
+import { showAttachmentPreview } from './attachment-view';
 import type { CachedBlob } from './local';
 import type { ProductionDoc, ProductionWorkspace } from './workspace';
 
@@ -48,6 +49,7 @@ export async function showAttachments(active: ProductionWorkspace, target?: Prod
         const status = row.archiveId ? '重新提交前原始副本，保留供下载' : inMemory ? '本机保存失败，原文件仍在页面内存' : oldEpoch ? '恢复前附件，保留在此设备' : row.saved ? '已缓存，已保存到云端' : row.blockedReason || state.errorMessage || (state.uploading ? '正在上传' : linked ? '已保存到此设备，等待上传' : '已保存到此设备，尚未添加到文档，请确认重新提交');
         item.append(element('p', `${(row.data.size / 1_000_000).toFixed(2)} MB · ${status}`));
         const controls = element('div');
+        controls.append(act('预览附件', () => showAttachmentPreview(name, row.type || metadata.type || '', row.data, () => downloadAttachment({ ...row, name }))));
         controls.append(act('下载原文件', () => downloadAttachment({ ...row, name })));
         if (inMemory) controls.append(act('重试本机保存', () => active.blobs.retryLocalSave()));
         if (!row.archiveId && !oldEpoch && !row.saved && !row.blockedReason && !inMemory && linked) controls.append(act('重试上传', () => active.blobs.upload(row.blobKey)));

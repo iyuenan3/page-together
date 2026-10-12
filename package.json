@@ -14,6 +14,7 @@
     "build": "npm run check && vite build && node scripts/third-party-notices.mjs && node scripts/generate-sw.mjs && npm run build:server",
     "preview": "vite preview --host 127.0.0.1",
     "test": "npm run build:server && node --test build/test/*.test.js",
+    "test:capacity": "npm run build:server && node scripts/validate-capacity.mjs",
     "server": "node build/server/main.js",
     "server:admin": "node build/server/admin.js"
   },
