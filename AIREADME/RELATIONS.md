@@ -5,6 +5,7 @@
 BlockSuite 官方编辑器与文档模型：https://github.com/toeverything/blocksuite 。
 Yjs 官方 CRDT：https://github.com/yjs/yjs 。
 PDF.js 官方本地渲染：https://github.com/mozilla/pdf.js/releases/tag/v6.4.299 ，固定 pdfjs-dist 6.4.299，阅读器和资源随应用打包，无外部转换服务。
+fflate 官方 ZIP 读写：https://github.com/101arrowz/fflate ，从现有安装图显式固定 0.8.3；按实际解压字节限制迁移包，不信任声明大小。
 本地验证基线固定 BlockSuite 0.22.4、Yjs 13.6.33，具体依赖见 package.json 与 package-lock.json；许可见 THIRD_PARTY_NOTICES.md。生产版本在完整验收后确定。
 
 ## 入向依赖

@@ -1,22 +1,22 @@
 # pageTogether · AIREADME
 > 给自己和朋友的共享文档与画板空间 ｜ 生命周期：active
-> last-synced: 6f7fa7a · 2026-10-12
+> last-synced: 2fb0633 · 2026-10-12
 
 ## 状态
 
 | 文件 | 状态 | 摘要 |
 |---|:--:|---|
 | CORE | ✅ | 朋友内部使用定位与硬边界 |
-| RELATIONS | ✅ | 官方上游、固定 PDF.js 版本与展示关系 |
-| SPEC | ✅ | HTTP、附件作用域、保存确认、远端状态与备份契约 |
-| ARCHITECTURE | ✅ | 保存同步、原生适配、离线稿、附件及本地 PDF 数据流 |
+| RELATIONS | ✅ | 官方上游、固定 PDF.js 与 fflate 版本及展示关系 |
+| SPEC | ✅ | 鉴权保存、附件、原生链接、内容迁移与服务备份契约 |
+| ARCHITECTURE | ✅ | 保存同步、原生引用、内容迁移、离线稿及本地 PDF 数据流 |
 | DEPLOYMENT | ⚑ | 未部署，目标 ECS 已只读核验 |
 | PRD | ✅ | 完整原生能力、三档权限、离线重连与恢复验收 |
-| ROADMAP | ✅ | 正文系统拖入、系统多文件粘贴及 PDF 只读操作通过，画板拖入与完整能力待验 |
+| ROADMAP | ✅ | 引用、数据表与主要迁移格式通过，画板系统拖入和其他能力待验 |
 | CONVENTIONS | ✅ | 命名、证据、公开边界与历史维护 |
-| DECISIONS | ✅ | ADR-001 至 ADR-018 |
-| MEMORY | ✅ | 编辑器、异常稿、附件队列、系统输入与故障回归经验 |
-| CHANGELOG | ✅ | 保存恢复、系统输入、PDF 画板控件及 10 人与 50 MB 本机验证 |
+| DECISIONS | ✅ | ADR-001 至 ADR-020 |
+| MEMORY | ✅ | 编辑器、异常稿、附件、系统输入、创建与目录竞态经验 |
+| CHANGELOG | ✅ | 引用、数据表、25 篇原生往返及此前 10 人与 50 MB 本机基线 |
 | EDITOR_CAPABILITIES | ⚑ | 完整静态清单与逐项运行证据 |
 | CAPACITY | ✅ | 固定负载、复现命令、10 人与 50 MB 实测及边界 |
 
