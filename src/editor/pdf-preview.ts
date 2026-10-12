@@ -12,7 +12,7 @@ export class PdfPreview extends HTMLElement {
     this.input = value;
     if (this.isConnected) this.start();
   }
-  connectedCallback() { this.start(); }
+  connectedCallback() { this.contentEditable = 'false'; this.start(); }
   disconnectedCallback() { this.stop?.(); this.stop = undefined; }
 
   private start() {
@@ -21,7 +21,7 @@ export class PdfPreview extends HTMLElement {
     const root = this.shadowRoot ?? this.attachShadow({ mode: 'open' });
     root.replaceChildren();
     const style = document.createElement('style');
-    style.textContent = ':host{display:block;background:#f2f4f3;color:#19251f;padding:12px;box-sizing:border-box;font:14px/1.5 system-ui}nav{display:flex;align-items:center;gap:12px;flex-wrap:wrap}button,a{font:inherit}canvas{display:block;max-width:100%;height:auto;margin:12px auto;background:white}canvas[hidden]{display:none}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto}p{margin:8px 0}';
+    style.textContent = ':host{display:block;background:#f2f4f3;color:#19251f;padding:12px;box-sizing:border-box;font:14px/1.5 system-ui}nav{display:flex;align-items:center;gap:12px;flex-wrap:wrap}nav,details{position:relative;z-index:2}button,a{font:inherit}canvas{display:block;max-width:100%;height:auto;margin:12px auto;background:white}canvas[hidden]{display:none}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto}p{margin:8px 0}';
     const status = document.createElement('p'); status.setAttribute('role', 'status'); status.textContent = '正在读取 PDF';
     const nav = document.createElement('nav'); nav.setAttribute('aria-label', 'PDF 翻页');
     const previous = document.createElement('button'); previous.textContent = '上一页'; previous.disabled = true;
@@ -30,6 +30,8 @@ export class PdfPreview extends HTMLElement {
     const canvas = document.createElement('canvas'); canvas.hidden = true; canvas.setAttribute('role', 'img');
     const details = document.createElement('details'), summary = document.createElement('summary'), text = document.createElement('pre');
     summary.textContent = '本页文字'; details.append(summary, text);
+    // Keep read-only controls above the native Note mask without disabling selection.
+    for (const controls of [nav, details]) for (const kind of ['pointerdown', 'mousedown', 'click']) controls.addEventListener(kind, event => event.stopPropagation());
     nav.append(previous, counter, next); root.append(style, status, nav, canvas, details);
     let disposed = false, task: PDFDocumentLoadingTask | undefined, pdf: PDFDocumentProxy | undefined, render: RenderTask | undefined, pageNumber = 1;
     const abort = new AbortController();
