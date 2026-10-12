@@ -1,18 +1,21 @@
 import { openDB } from 'idb';
 import * as Y from 'yjs';
-import type { DocumentScope } from '../../shared/protocol';
+import type { DocumentScope } from '../../shared/protocol.js';
 
 export const scopeKey = (scope: DocumentScope) => `${scope.epoch}:${scope.generation}:${scope.docId}`;
 export class LocalPersistence {
   private database;
   constructor(readonly memberId: string) {
-    this.database = openDB('page-together-v1-' + memberId, 1, {
-      upgrade(db) {
-        db.createObjectStore('documents');
-        const updates = db.createObjectStore('updates', { keyPath: 'id' });
-        updates.createIndex('scope', 'scope');
-        db.createObjectStore('drafts', { keyPath: 'id' });
-        db.createObjectStore('blobs', { keyPath: 'key' });
+    this.database = openDB('page-together-v1-' + memberId, 2, {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          db.createObjectStore('documents');
+          const updates = db.createObjectStore('updates', { keyPath: 'id' });
+          updates.createIndex('scope', 'scope');
+          db.createObjectStore('drafts', { keyPath: 'id' });
+          db.createObjectStore('blobs', { keyPath: 'key' });
+        }
+        if (oldVersion < 2) db.createObjectStore('access');
       },
     });
   }
@@ -30,6 +33,43 @@ export class LocalPersistence {
   async pending(scope: DocumentScope): Promise<{ id: string; update: Uint8Array }[]> {
     return (await this.database).getAllFromIndex('updates', 'scope', scopeKey(scope));
   }
+  async checkAccess(scope: DocumentScope, revision: number): Promise<string | undefined> {
+    const tx = (await this.database).transaction(['access', 'updates'], 'readwrite', { durability: 'strict' });
+    const key = scopeKey(scope), previous = await tx.objectStore('access').get(key) as { revision: number; reason?: string } | undefined;
+    const pending = await tx.objectStore('updates').index('scope').count(key);
+    const reason = previous?.reason ?? (pending && previous?.revision !== revision ? '成员权限记录已变化或尚未核验，离线稿保留，暂停上传' : undefined);
+    await tx.objectStore('access').put({ revision, reason }, key);
+    await tx.done;
+    return reason;
+  }
+  async block(scope: DocumentScope, reason: string) {
+    const tx = (await this.database).transaction('access', 'readwrite', { durability: 'strict' });
+    const key = scopeKey(scope), previous = await tx.store.get(key);
+    await tx.store.put({ ...previous, reason }, key); await tx.done;
+  }
+  async blockPending(reason: string) {
+    const tx = (await this.database).transaction(['access', 'updates', 'blobs'], 'readwrite', { durability: 'strict' });
+    const updates = await tx.objectStore('updates').getAll() as { scope: string }[];
+    for (const key of new Set(updates.map(row => row.scope))) {
+      const previous = await tx.objectStore('access').get(key);
+      await tx.objectStore('access').put({ ...previous, reason }, key);
+    }
+    for (const blob of await tx.objectStore('blobs').getAll()) if (!blob.saved) {
+      await tx.objectStore('blobs').put({ ...blob, blockedReason: reason });
+    }
+    await tx.done;
+  }
+  async isolate(scope: DocumentScope) {
+    // Publish the complete old draft before removing it from the upload queue.
+    const tx = (await this.database).transaction(['documents', 'updates', 'drafts', 'access'], 'readwrite', { durability: 'strict' });
+    const key = scopeKey(scope), data = await tx.objectStore('documents').get(key);
+    const access = await tx.objectStore('access').get(key);
+    if (data) await tx.objectStore('drafts').put({ id: crypto.randomUUID(), scope: key, data, createdAt: Date.now(), reason: access?.reason });
+    for (const id of await tx.objectStore('updates').index('scope').getAllKeys(key)) await tx.objectStore('updates').delete(id);
+    await tx.objectStore('documents').delete(key);
+    await tx.objectStore('access').delete(key);
+    await tx.done;
+  }
   async acknowledge(ids: string[]) {
     const tx = (await this.database).transaction('updates', 'readwrite', { durability: 'strict' });
     for (const id of ids) await tx.store.delete(id);
@@ -41,7 +81,7 @@ export class LocalPersistence {
     await tx.store.put({ id: crypto.randomUUID(), scope: scopeKey(scope), data, createdAt: Date.now() });
     await tx.done;
   }
-  async drafts(): Promise<{ id: string; scope: string; data: Uint8Array; createdAt: number }[]> {
+  async drafts(): Promise<{ id: string; scope: string; data: Uint8Array; createdAt: number; reason?: string }[]> {
     return (await this.database).getAll('drafts');
   }
   async documents(): Promise<{ scope: string; data: Uint8Array }[]> {
@@ -50,17 +90,17 @@ export class LocalPersistence {
     await tx.done;
     return keys.map((key, index) => ({ scope: String(key), data: values[index] }));
   }
-  async setBlob(epoch: string, key: string, data: Blob, saved = false) {
+  async setBlob(epoch: string, key: string, data: Blob, saved = false, accessRevision?: number) {
     const tx = (await this.database).transaction('blobs', 'readwrite', { durability: 'strict' });
     const previous = await tx.store.get(epoch + ':' + key);
-    await tx.store.put({ key: epoch + ':' + key, blobKey: key, epoch, data, saved: saved || previous?.saved === true });
+    await tx.store.put({ key: epoch + ':' + key, blobKey: key, epoch, data, accessRevision: previous?.accessRevision ?? accessRevision, blockedReason: previous?.blockedReason, saved: saved || previous?.saved === true });
     await tx.done;
   }
   async getBlob(epoch: string, key: string): Promise<Blob | null> {
     return (await (await this.database).get('blobs', epoch + ':' + key))?.data ?? null;
   }
-  async blobs(epoch: string, pendingOnly = false): Promise<{ key: string; blobKey: string; epoch: string; data: Blob; saved: boolean }[]> {
-    return (await (await this.database).getAll('blobs')).filter(row => row.epoch === epoch && (!pendingOnly || !row.saved));
+  async blobs(epoch?: string, pendingOnly = false): Promise<{ key: string; blobKey: string; epoch: string; data: Blob; saved: boolean; accessRevision?: number; blockedReason?: string }[]> {
+    return (await (await this.database).getAll('blobs')).filter(row => (!epoch || row.epoch === epoch) && (!pendingOnly || !row.saved));
   }
   async acknowledgeBlob(epoch: string, key: string) {
     const tx = (await this.database).transaction('blobs', 'readwrite', { durability: 'strict' });

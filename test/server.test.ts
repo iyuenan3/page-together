@@ -176,6 +176,54 @@ test('role downgrade closes existing access and an expired live session is stopp
   assert.equal((await f.request('/api/session', editor.cookie)).status, 401);
 });
 
+test('authorization revision records transient role changes and revocation across identity recovery', async t => {
+  const f = await fixture(); t.after(f.close);
+  const editor = await f.member('edit');
+  const change = (role: string, active: boolean) => f.request('/api/members/' + editor.member.id, f.owner, 'PATCH', { role, active });
+  const session = async (cookie = editor.cookie) => (await (await f.request('/api/session', cookie)).json() as { member: { accessRevision: number } }).member;
+  assert.equal((await session()).accessRevision, 0);
+  await change('view', true); await change('edit', true);
+  assert.equal((await session()).accessRevision, 2);
+  await change('edit', true); assert.equal((await session()).accessRevision, 2);
+  await change('edit', false); await change('edit', true);
+  assert.equal((await f.request('/api/session', editor.cookie)).status, 401);
+  const invitation = await (await f.request('/api/invitations', f.owner, 'POST', { role: 'edit', memberId: editor.member.id, recovery: true })).json() as { token: string };
+  const response = await f.request('/api/auth/invite', '', 'POST', { token: invitation.token, nickname: '不能新建身份' });
+  assert.equal(response.status, 200);
+  const cookie = response.headers.get('set-cookie')!.split(';')[0];
+  const recovered = await response.json() as { member: { id: string; accessRevision: number } };
+  assert.equal(recovered.member.id, editor.member.id); assert.equal(recovered.member.accessRevision, 4);
+  assert.equal((await session(cookie)).accessRevision, 4);
+});
+
+test('restoring a backup taken before revocation never revives old sessions, invitations or the old epoch', async t => {
+  const f = await fixture(); t.after(f.close);
+  const editor = await f.member('edit');
+  await f.request('/api/documents', f.owner, 'POST', { id: 'old-backup', title: '旧备份' });
+  const invitation = await (await f.request('/api/invitations', f.owner, 'POST', { role: 'edit' })).json() as { token: string };
+  const scope = { epoch: f.store.epoch, generation: 1, docId: 'old-backup' };
+  const doc = new Y.Doc(); t.after(() => doc.destroy()); doc.getText('body').insert(0, '备份正文');
+  f.store.push(hash(f.owner.split('=')[1]), scope, Y.encodeStateAsUpdate(doc));
+  const parent = await mkdtemp(join(tmpdir(), 'page-together-older-backup-')); t.after(() => rm(parent, { recursive: true, force: true }));
+  await backup(f.store, join(parent, 'backup'));
+  await f.request('/api/members/' + editor.member.id, f.owner, 'PATCH', { role: 'edit', active: false });
+  const result = await restore(join(parent, 'backup'), join(parent, 'restored'));
+  const restored = new Store(join(parent, 'restored')); t.after(() => restored.close());
+  assert.equal(restored.getMember(editor.member.id).active, false);
+  assert.throws(() => restored.authenticate(hash(editor.cookie.split('=')[1])), /session_expired/);
+  assert.throws(() => restored.recoverOwner(f.recovery), /invalid_recovery/);
+  const owner = restored.recoverOwner(result.recoveryCode), ownerHash = hash(owner.session);
+  assert.throws(() => restored.listDocuments(ownerHash), /space_paused/);
+  restored.resume(ownerHash);
+  assert.throws(() => restored.redeemInvite(invitation.token, '旧邀请'), /invalid_invitation/);
+  restored.changeMember(ownerHash, editor.member.id, 'edit', true);
+  assert.throws(() => restored.authenticate(hash(editor.cookie.split('=')[1])), /session_expired/);
+  assert.throws(() => restored.push(ownerHash, scope, Y.encodeStateAsUpdate(doc)), /space_epoch_changed/);
+  const fresh = new Y.Doc(); t.after(() => fresh.destroy());
+  Y.applyUpdate(fresh, restored.pull(ownerHash, { ...scope, epoch: restored.epoch }, Y.encodeStateVector(fresh)).update);
+  assert.equal(fresh.getText('body').toString(), '备份正文');
+});
+
 test('snapshot compaction preserves Yjs data and rejected large updates leave it unchanged', async t => {
   const f = await fixture({ maxDocumentBytes: 4096 }); t.after(f.close);
   await f.request('/api/documents', f.owner, 'POST', { id: 'doc', title: '快照' });

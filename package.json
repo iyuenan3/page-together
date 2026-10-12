@@ -36,6 +36,7 @@
     "@types/node": "22.20.5",
     "@types/ws": "8.18.2",
     "@vanilla-extract/vite-plugin": "5.2.6",
+    "fake-indexeddb": "6.2.5",
     "typescript": "5.8.2",
     "vite": "6.4.4",
     "vite-plugin-wasm": "3.6.0"

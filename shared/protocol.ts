@@ -6,6 +6,7 @@ export interface Member {
   role: Role;
   owner: boolean;
   active: boolean;
+  accessRevision: number;
 }
 export interface DocumentInfo {
   id: string;

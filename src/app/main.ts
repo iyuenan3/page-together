@@ -84,7 +84,7 @@ async function exportLocal() {
   const local = workspace?.local ?? new LocalPersistence(session.member.id);
   try {
     const memory = workspace ? [...new Set([...workspace.docs.values(), ...workspace.retired, ...current ? [current] : []])].map(doc => ({ scope: doc.sync.scope, data: toBase64(Y.encodeStateAsUpdate(doc.spaceDoc)) })) : [];
-    const [documentResult, draftResult, blobResult] = await Promise.allSettled([local.documents(), local.drafts(), local.blobs(session.epoch)]);
+    const [documentResult, draftResult, blobResult] = await Promise.allSettled([local.documents(), local.drafts(), local.blobs()]);
     const documents = documentResult.status === 'fulfilled' ? documentResult.value.map(row => ({ ...row, data: toBase64(row.data) })) : [];
     const drafts = draftResult.status === 'fulfilled' ? draftResult.value.map(row => ({ ...row, data: toBase64(row.data) })) : [];
     const attachments = blobResult.status === 'fulfilled' ? blobResult.value : [];
@@ -202,6 +202,7 @@ async function saveStatus() {
   root.querySelector<HTMLButtonElement>('#new-doc')!.disabled = !canEdit(active.member.role) || !navigator.onLine;
   root.querySelector<HTMLButtonElement>('#delete-doc')!.hidden = active.member.role !== 'manage';
   root.querySelector<HTMLDivElement>('#management')!.hidden = active.member.role !== 'manage';
+  root.querySelector<HTMLButtonElement>('#reopen-cloud')!.hidden = current?.sync.state !== 'blocked';
 }
 function updatePanel() {
   if (!editor?.std || !current || !panelKind) return;
@@ -225,6 +226,7 @@ async function selectDocument(doc: ProductionDoc) {
 }
 async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   if (session.paused) {
+    workspace?.dispose(); current = undefined;
     root.innerHTML = '<main class="login"><h1>空间恢复维护中</h1><p>请先核对成员资格和恢复结果，再恢复访问。</p><p id="notice" role="alert"></p></main>';
     workspace = new ProductionWorkspace(session.member, session.epoch, []); workspace.report = report;
     root.firstElementChild!.append(button('检查成员', members), button('确认恢复访问', async () => { await api('maintenance/resume', 'POST'); await bootstrap(); })); return;
@@ -237,7 +239,7 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   workspace.changed = () => { renderDocuments(); void saveStatus().catch(report); };
   workspace.cacheCatalog();
   cacheSession(session);
-  root.innerHTML = `<aside class="sidebar"><div class="brand">pageTogether</div><p id="member-name"></p><button id="new-doc" class="new-doc">＋ 新建文档</button><nav id="documents" aria-label="文档"></nav><div id="management"></div><div id="local-tools"></div><p id="notice" role="alert"></p></aside><main class="main"><header class="toolbar"><div class="mode-tabs"><button id="page-mode" aria-pressed="true">正文</button><button id="edgeless-mode" aria-pressed="false">画板</button></div><div class="panel-tools"><button id="outline-panel">大纲</button><button id="frame-panel">画框</button><button id="adapter-panel">导入导出</button></div><span id="save-status" role="status">正在加载</span></header><div class="work-area"><div id="editor-region" class="editor-region"></div><aside id="panel-region" class="native-panel" hidden><div class="panel-heading"><span>原生面板</span><button id="close-panel">关闭</button></div><div id="panel-content"></div></aside></div><footer><button id="delete-doc">移入回收站</button><button id="retry-save">重试本机保存</button><button id="logout">退出空间</button></footer></main>`;
+  root.innerHTML = `<aside class="sidebar"><div class="brand">pageTogether</div><p id="member-name"></p><button id="new-doc" class="new-doc">＋ 新建文档</button><nav id="documents" aria-label="文档"></nav><div id="management"></div><div id="local-tools"></div><p id="notice" role="alert"></p></aside><main class="main"><header class="toolbar"><div class="mode-tabs"><button id="page-mode" aria-pressed="true">正文</button><button id="edgeless-mode" aria-pressed="false">画板</button></div><div class="panel-tools"><button id="outline-panel">大纲</button><button id="frame-panel">画框</button><button id="adapter-panel">导入导出</button></div><span id="save-status" role="status">正在加载</span></header><div class="work-area"><div id="editor-region" class="editor-region"></div><aside id="panel-region" class="native-panel" hidden><div class="panel-heading"><span>原生面板</span><button id="close-panel">关闭</button></div><div id="panel-content"></div></aside></div><footer><button id="delete-doc">移入回收站</button><button id="retry-save">重试本机保存</button><button id="reopen-cloud" hidden>保留离线稿并读取云端</button><button id="logout">退出空间</button></footer></main>`;
   root.querySelector('#member-name')!.textContent = session.member.nickname;
   editor = new EditorView(); root.querySelector('#editor-region')!.append(editor);
   workspace.slots.docListUpdated.subscribe(renderDocuments);
@@ -265,6 +267,21 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   root.querySelector<HTMLButtonElement>('#close-panel')!.onclick = () => { panelKind = undefined; root.querySelector<HTMLDivElement>('#panel-region')!.hidden = true; root.querySelector('#panel-content')!.replaceChildren(); };
   root.querySelector<HTMLButtonElement>('#delete-doc')!.onclick = () => { if (current) { try { workspace!.removeDoc(current.id); } catch (error) { report(error); } } };
   root.querySelector<HTMLButtonElement>('#retry-save')!.onclick = () => { for (const doc of workspace!.docs.values()) if (doc.loaded || doc.ready || doc.sync.state !== 'loading') void doc.sync.retryLocalSave(); void workspace!.blobs.flush(); };
+  root.querySelector<HTMLButtonElement>('#reopen-cloud')!.onclick = () => {
+    const active = workspace, doc = current;
+    if (!active || !doc) return;
+    Promise.resolve().then(async () => {
+      const session = await api<Session>('session');
+      if (session.member.id !== active.member.id) throw new Error('请先恢复原成员身份');
+      if (session.epoch !== active.epoch || session.paused) { await enter(session); return; }
+      const records = await api<DocumentInfo[]>('documents');
+      const record = records.find(row => row.id === doc.id);
+      if (!record || record.generation !== doc.record.generation) { await enter(session); return; }
+      active.member = session.member; active.accessChanged(session.member);
+      await selectDocument(await active.reopenCloud(doc));
+      report(new Error('旧离线稿已保留，可通过“导出本机内容与离线稿”下载；当前显示云端正文。'));
+    }).catch(report);
+  };
   root.querySelector<HTMLButtonElement>('#logout')!.onclick = () => { api('logout', 'POST').then(() => { localStorage.setItem('page-together-signed-out', 'true'); showLogin('已退出空间，本机离线内容仍保留。'); }).catch(report); };
   if (session.member.role === 'manage') root.querySelector('#management')!.append(button('邀请朋友', () => inviteMember()), button('成员管理', members), button('回收站', trash));
   root.querySelector('#local-tools')!.append(button('导出本机内容与离线稿', exportLocal));
@@ -278,6 +295,11 @@ async function bootstrap() {
   try { await enter(await api<Session>('session')); }
   catch (error) {
     const cached = savedSession();
+    if (error instanceof RequestError && [401, 403].includes(error.status) && cached) {
+      const local = workspace?.local ?? new LocalPersistence(cached.member.id);
+      try { await local.blockPending('身份或访问资格已失效，离线稿与附件保留供导出'); }
+      finally { if (!workspace) await local.close(); }
+    }
     if (error instanceof TypeError && cached && localStorage.getItem('page-together-signed-out') !== 'true') {
       const catalog = JSON.parse(localStorage.getItem('page-together-catalog-' + cached.member.id) ?? 'null') as { epoch: string; records: DocumentInfo[] } | null;
       if (catalog?.epoch === cached.epoch) { await enter(cached, catalog.records); report(error); return; }

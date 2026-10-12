@@ -64,7 +64,7 @@ class OfflineBlobSource implements BlobSource {
   async set(key: string, value: Blob) {
     if (this.readonly) throw new Error('read_only');
     if (value.size > 50_000_000) throw new Error('单个附件不能超过 50 MB');
-    await this.workspace.local.setBlob(this.workspace.epoch, key, value);
+    await this.workspace.local.setBlob(this.workspace.epoch, key, value, false, this.workspace.member.accessRevision);
     this.workspace.changed(); void this.flush(); return key;
   }
   async delete(_key: string) { throw new Error('附件暂不永久删除'); }
@@ -76,6 +76,7 @@ class OfflineBlobSource implements BlobSource {
       const session = await api<{ epoch: string; member: Member }>('session');
       if (session.member.id !== this.workspace.local.memberId || session.epoch !== this.workspace.epoch || !canEdit(session.member.role)) return;
       for (const record of await this.workspace.local.blobs(this.workspace.epoch, true)) {
+        if (record.blockedReason || record.accessRevision !== session.member.accessRevision) continue;
         const response = await fetch('/api/blobs/' + encodeURIComponent(record.blobKey), { method: 'PUT', credentials: 'same-origin', body: record.data });
         if (!response.ok) throw new RequestError(response.status, 'blob_upload_failed');
         await this.workspace.local.acknowledgeBlob(this.workspace.epoch, record.blobKey);
@@ -103,7 +104,7 @@ export class ProductionDoc implements Doc {
     this.awarenessStore.setLocalStateField('user', { name: workspace.member.nickname });
     this.yBlocks = this.spaceDoc.getMap('blocks');
     this.container = new StoreContainer(this);
-    this.sync = new DocumentSync(this.spaceDoc, { docId: record.id, epoch: workspace.epoch, generation: record.generation }, workspace.local);
+    this.sync = new DocumentSync(this.spaceDoc, { docId: record.id, epoch: workspace.epoch, generation: record.generation }, workspace.local, workspace.member.accessRevision);
     this.sync.onState = () => workspace.changed();
     this.sync.onAccess = member => {
       workspace.member = member;
@@ -176,6 +177,13 @@ export class ProductionWorkspace implements Workspace {
     this.cacheCatalog(); this.slots.docListUpdated.next(); return doc;
   }
   getDoc(id: string) { return this.docs.get(id) ?? null; }
+  async reopenCloud(doc: ProductionDoc) {
+    await doc.sync.pause('旧稿已保留供导出，不会自动上传');
+    await doc.sync.settled();
+    await this.local.isolate(doc.sync.scope);
+    this.retired.add(doc); doc.setReadonly(true);
+    return this.attach(doc.record);
+  }
   removeDoc(id: string) {
     if (this.member.role !== 'manage') throw new Error('仅管理者可以删除整篇文档');
     void api('documents/' + id + '/trash', 'POST').then(() => this.refresh()).catch(error => this.report(error));

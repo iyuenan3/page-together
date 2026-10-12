@@ -1,9 +1,9 @@
 import * as Y from 'yjs';
-import type { DocumentScope, ServerMessage } from '../../shared/protocol';
-import { canEdit } from '../../shared/protocol';
-import { LocalPersistence } from './local';
-import { api, RequestError } from './api';
-import type { Member } from '../../shared/protocol';
+import type { DocumentScope, ServerMessage } from '../../shared/protocol.js';
+import { canEdit } from '../../shared/protocol.js';
+import { LocalPersistence } from './local.js';
+import { api, RequestError } from './api.js';
+import type { Member } from '../../shared/protocol.js';
 
 export type SaveState = 'loading' | 'local' | 'syncing' | 'cloud' | 'blocked' | 'storage-error';
 export class DocumentSync {
@@ -31,6 +31,7 @@ export class DocumentSync {
     readonly doc: Y.Doc,
     readonly scope: DocumentScope,
     readonly local: LocalPersistence,
+    private accessRevision = 0,
   ) { this.doc.on('update', this.changed); }
   private setState(state: SaveState, reason = '') {
     this.state = state; this.reason = reason; this.onState(state, reason);
@@ -47,8 +48,14 @@ export class DocumentSync {
     await this.sequence;
     if (this.blocked) throw new Error(this.reason);
     if (!this.initial) return;
+    const reason = await this.local.checkAccess(this.scope, this.accessRevision);
     const cached = await this.local.load(this.scope);
     if (cached) Y.applyUpdate(this.doc, cached, this.remoteOrigin);
+    if (reason) {
+      this.blocked = true; this.setState('blocked', reason);
+      if (!cached) throw new Error(reason);
+      return;
+    }
     this.setState('local');
     const ready = !cached && waitForRemote ? new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => this.failInitial('此设备尚未缓存文档，连接成功后请重新打开'), 15_000);
@@ -72,6 +79,17 @@ export class DocumentSync {
     }
     return pending;
   }
+  private async block(reason: string, memberWide = false) {
+    this.blocked = true;
+    this.setState('blocked', reason);
+    this.failInitial(reason);
+    try {
+      await this.preserveDraft();
+      if (memberWide) await this.local.blockPending(reason);
+      await this.local.block(this.scope, reason);
+    }
+    catch { this.localFailed = true; this.setState('storage-error', '暂停状态保存失败，请保留页面并导出当前修改'); }
+  }
   private retryConnection() {
     if (!this.blocked && !this.stopped && !this.localFailed) {
       this.setState('local', '连接中断，修改保留在此设备');
@@ -91,15 +109,18 @@ export class DocumentSync {
       const session = await api<{ member: Member; epoch: string }>('session');
       if (this.stopped) return;
       if (session.member.id !== this.local.memberId) {
-        this.blocked = true; this.setState('blocked', '浏览器成员身份已切换，原成员离线稿保留，暂停上传'); this.failInitial(this.reason); return;
+        await this.block('浏览器成员身份已切换，原成员离线稿保留，暂停上传'); return;
       }
       this.onAccess(session.member);
       if (session.epoch !== this.scope.epoch || !canEdit(session.member.role) && pending.length > 0) {
-        this.blocked = true; this.setState('blocked', '权限或恢复状态已变化，离线稿保留，暂停上传'); this.failInitial(this.reason); return;
+        await this.block('权限或恢复状态已变化，离线稿保留，暂停上传'); return;
       }
+      const reason = await this.local.checkAccess(this.scope, session.member.accessRevision);
+      if (reason) { await this.block(reason); return; }
+      this.accessRevision = session.member.accessRevision;
     } catch (error) {
       if (error instanceof RequestError && [401, 403, 409].includes(error.status)) {
-        this.blocked = true; this.setState('blocked', '需要恢复原成员身份，离线稿保留');
+        await this.block('需要恢复原成员身份，离线稿保留', true);
       } else if (error instanceof RequestError || error instanceof TypeError) this.retryConnection();
       else { this.localFailed = true; this.setState('storage-error', '离线稿保存失败，请导出当前修改'); }
       this.failInitial('此设备尚未缓存文档，请在连接成功后重新打开'); return;
@@ -110,7 +131,7 @@ export class DocumentSync {
     let incoming = Promise.resolve();
     socket.onmessage = event => {
       incoming = incoming.then(() => this.message(JSON.parse(event.data) as ServerMessage, socket))
-        .catch(() => { this.blocked = true; this.setState('blocked', '同步响应异常，离线稿已保留'); socket.close(); });
+        .catch(async () => { await this.block('同步响应异常，离线稿已保留'); socket.close(); });
     };
     socket.onerror = () => {};
     socket.onclose = () => {
@@ -131,11 +152,14 @@ export class DocumentSync {
       await this.sequence;
       const pending = await this.preserveDraft();
       if (message.member.id !== this.local.memberId) {
-        this.blocked = true; this.setState('blocked', '浏览器成员身份已切换，原成员离线稿保留，暂停上传'); this.failInitial(this.reason); socket.close(); return;
+        await this.block('浏览器成员身份已切换，原成员离线稿保留，暂停上传'); socket.close(); return;
       }
       if (message.epoch !== this.scope.epoch || !canEdit(message.member.role) && pending.length > 0) {
-        this.blocked = true; this.setState('blocked', '权限或恢复状态已变化，离线稿保留，暂停上传'); this.failInitial(this.reason); socket.close(); return;
+        await this.block('权限或恢复状态已变化，离线稿保留，暂停上传'); socket.close(); return;
       }
+      const reason = await this.local.checkAccess(this.scope, message.member.accessRevision);
+      if (reason) { await this.block(reason); socket.close(); return; }
+      this.accessRevision = message.member.accessRevision; this.onAccess(message.member);
       this.setState('syncing');
       socket.send(JSON.stringify({ v: 1, type: 'open', requestId: crypto.randomUUID(), ...this.scope, stateVector: toBase64(Y.encodeStateVector(this.doc)) }));
     } else if (message.type === 'sync') {
@@ -160,10 +184,7 @@ export class DocumentSync {
       if (message.code === 'storage_unavailable' || message.code === 'space_paused') {
         socket.close(); return;
       }
-      await this.sequence;
-      if ((await this.local.pending(this.scope)).length) await this.local.draft(this.scope, Y.encodeStateAsUpdate(this.doc));
-      this.blocked = true; this.setState('blocked', '同步已暂停：' + message.code + '。本机修改仍可导出'); socket.close();
-      this.failInitial(this.reason);
+      await this.block('同步已暂停：' + message.code + '。本机修改仍可导出'); socket.close();
     } else if (message.type === 'catalog') this.onCatalog();
   }
   private async flush() {
@@ -172,6 +193,8 @@ export class DocumentSync {
     const sequence = this.sequence;
     try {
       await sequence;
+      const reason = await this.local.checkAccess(this.scope, this.accessRevision);
+      if (reason) { await this.block(reason); return; }
       const pending = await this.local.pending(this.scope);
       if (!pending.length) { if (this.sequence === sequence) this.setState('cloud'); return; }
       const update = Y.mergeUpdates(pending.map(row => row.update));
@@ -199,11 +222,7 @@ export class DocumentSync {
   get loading() { return this.initial; }
   settled() { return this.sequence; }
   async pause(reason: string) {
-    this.blocked = true;
-    this.setState('blocked', reason);
-    try { await this.preserveDraft(); }
-    catch { this.setState('storage-error', '离线稿保存失败，请导出当前修改'); }
-    finally { this.stop(); }
+    await this.block(reason); this.stop();
   }
   stop() {
     this.stopped = true;

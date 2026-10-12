@@ -72,6 +72,11 @@ export class Store {
         key TEXT PRIMARY KEY, size INTEGER NOT NULL, hash TEXT NOT NULL
       );
     `);
+    // Additive migration preserves existing members, sessions and backups.
+    const columns = this.db.pragma('table_info(members)') as { name: string }[];
+    if (!columns.some(column => column.name === 'accessRevision')) {
+      this.db.exec('ALTER TABLE members ADD COLUMN accessRevision INTEGER NOT NULL DEFAULT 0');
+    }
     this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('epoch', randomUUID());
     this.db.prepare('INSERT OR IGNORE INTO settings VALUES (?,?)').run('paused', '0');
   }
@@ -91,7 +96,7 @@ export class Store {
     return this.transaction(() => {
       requireThat(!this.db.prepare('SELECT id FROM members LIMIT 1').get(), 409, 'already_initialized');
       const id = randomUUID(), recoveryCode = token();
-      this.db.prepare('INSERT INTO members VALUES (?,?,?,1,1)').run(id, text(nickname, 80), 'manage');
+      this.db.prepare('INSERT INTO members(id,nickname,role,owner,active) VALUES (?,?,?,1,1)').run(id, text(nickname, 80), 'manage');
       this.db.prepare('INSERT INTO settings VALUES (?,?)').run('recovery_hash', hash(recoveryCode));
       return { member: this.getMember(id), recoveryCode };
     });
@@ -147,10 +152,10 @@ export class Store {
       requireThat(issuer.active && issuer.role === 'manage', 401, 'invalid_invitation');
       const memberId = row.member_id ?? randomUUID();
       if (!row.member_id) {
-        this.db.prepare('INSERT INTO members VALUES (?,?,?,0,1)').run(memberId, text(nickname, 80), row.role);
+        this.db.prepare('INSERT INTO members(id,nickname,role,owner,active) VALUES (?,?,?,0,1)').run(memberId, text(nickname, 80), row.role);
       } else {
         if (row.recovery) this.db.prepare('DELETE FROM sessions WHERE member_id=?').run(memberId);
-        this.db.prepare('UPDATE members SET active=1 WHERE id=?').run(memberId);
+        this.db.prepare('UPDATE members SET accessRevision=accessRevision+CASE WHEN active=0 THEN 1 ELSE 0 END, active=1 WHERE id=?').run(memberId);
       }
       this.db.prepare('DELETE FROM invitations WHERE id=?').run(row.id);
       return this.newSession(memberId);
@@ -171,7 +176,8 @@ export class Store {
       requireThat(!target.owner, 403, 'owner_protected');
       requireThat(actor.owner || (target.role !== 'manage' && role !== 'manage'), 403, 'owner_required');
       requireThat(['manage', 'edit', 'view'].includes(role), 400, 'invalid_role');
-      this.db.prepare('UPDATE members SET role=?, active=? WHERE id=?').run(role, active ? 1 : 0, id);
+      this.db.prepare('UPDATE members SET role=?, active=?, accessRevision=accessRevision+? WHERE id=?')
+        .run(role, active ? 1 : 0, target.role !== role || target.active !== active ? 1 : 0, id);
       this.db.prepare('DELETE FROM invitations WHERE member_id=? OR issuer=?').run(id, id);
       if (!active) this.db.prepare('DELETE FROM sessions WHERE member_id=?').run(id);
       return this.getMember(id);

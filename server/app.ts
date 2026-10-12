@@ -88,7 +88,7 @@ export function createApp(options: AppOptions) {
   function validPeer(ws: WebSocket, peer: Peer): boolean {
     try {
       const current = store.authenticate(peer.sessionHash);
-      if (current.role !== peer.member.role) throw new ApiError(403, 'role_changed');
+      if (current.accessRevision !== peer.member.accessRevision) throw new ApiError(403, 'access_changed');
       return true;
     } catch { ws.close(4403, 'access_changed'); return false; }
   }
