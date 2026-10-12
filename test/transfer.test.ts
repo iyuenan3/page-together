@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import ts from 'typescript';
 import { zipSync } from 'fflate';
 import { documentIdFromUrl } from '../shared/document-links.js';
 import { packTransfer, prepareTextSnapshot, relativeTransferPath, remapDocumentReferences, TRANSFER_LIMITS, unpackTransfer } from '../shared/transfer.js';
@@ -27,6 +29,27 @@ test('text export tolerates empty progress cells while preserving zero and false
   const copy = structuredClone(native); prepareTextSnapshot(copy);
   assert.deepEqual(copy.props.cells.row, { zero: { value: 0 }, unchecked: { value: false } });
   assert.deepEqual(native.props.cells.row.empty, {});
+});
+test('actual native static table export aligns reordered headers and includes computed creation time', () => {
+  const source = readFileSync('node_modules/@blocksuite/affine-block-database/src/adapters/utils.ts', 'utf8');
+  const exported: { processTable?: (columns: unknown[], children: unknown[], cells: unknown) => { headers: { name: string }[]; rows: { cells: { value: unknown }[] }[] } } = {};
+  const models = Object.fromEntries(['title', 'number', 'checkbox', 'rich-text'].map(type => [type, { config: { rawValue: { toString: ({ value }: { value: unknown }) => String(value) } } }]));
+  new Function('exports', 'require', ts.transpile(source, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS }))(exported, () => ({ databaseBlockModels: models }));
+  const native = { flavour: 'affine:database', props: {
+    columns: [{ id: 'number', type: 'number', name: 'Quantity' }, { id: 'title', type: 'title', name: 'Title' }, { id: 'created', type: 'created-time', name: 'Created' }],
+    cells: { row: { number: { value: 0 } } },
+  }, children: [{ id: 'row', flavour: 'affine:paragraph', props: { text: { '$blocksuite:internal:text$': true, delta: [{ insert: 'Row' }] }, 'meta:createdAt': 1700000000000 }, children: [] }] };
+  const render = (snapshot: typeof native) => exported.processTable!(snapshot.props.columns, snapshot.children, snapshot.props.cells);
+  const original = render(native);
+  assert.equal(original.headers[0].name, 'Quantity');
+  assert.deepEqual(original.rows[0].cells[0].value, native.children[0].props.text);
+  assert.equal(original.rows[0].cells[2].value, '');
+  const copy = structuredClone(native); prepareTextSnapshot(copy);
+  const table = render(copy);
+  assert.deepEqual(table.headers.map(column => column.name), ['Title', 'Quantity', 'Created']);
+  assert.deepEqual(table.rows[0].cells.map(cell => cell.value), [native.children[0].props.text, '0', { '$blocksuite:internal:text$': true, delta: [{ insert: '2023-11-15 06:13:20.000 +08:00' }] }]);
+  assert.deepEqual(native.props.columns.map(column => column.type), ['number', 'title', 'created-time']);
+  assert.deepEqual(native.props.cells.row, { number: { value: 0 } });
 });
 test('ZIP preflight rejects traversal, oversized inflation, unsupported compression and truncated entries', () => {
   assert.throws(() => unpackTransfer(zipSync({ '../escape': new Uint8Array([1]) })), /路径/);

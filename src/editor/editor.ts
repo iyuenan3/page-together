@@ -2,6 +2,9 @@ import { ViewExtensionManager } from '@blocksuite/affine/ext-loader';
 import { getInternalViewExtensions } from '@blocksuite/affine/extensions/view';
 import { RefNodeSlotsProvider } from '@blocksuite/affine/inlines/reference';
 import type { DocMode } from '@blocksuite/affine/model';
+import { Bound } from '@blocksuite/affine/global/gfx';
+import { HighlightSelection } from '@blocksuite/affine/shared/selection';
+import { GfxControllerIdentifier } from '@blocksuite/affine/std/gfx';
 import {
   CommunityCanvasTextFonts,
   DocModeExtension,
@@ -9,6 +12,7 @@ import {
   FontConfigExtension,
   FileSizeLimitProvider,
   ParseDocUrlExtension,
+  GenerateDocUrlExtension,
 } from '@blocksuite/affine/shared/services';
 import { BlockStdScope, ShadowlessElement } from '@blocksuite/affine/std';
 import type { ExtensionType, Store } from '@blocksuite/affine/store';
@@ -17,7 +21,7 @@ import { html } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { Subscription } from 'rxjs';
 import { MAX_ATTACHMENT_BYTES } from '../../shared/attachments';
-import { documentIdFromUrl } from '../../shared/document-links';
+import { documentReferenceFromUrl, documentUrl, referenceParams, type DocumentReferenceParams } from '../../shared/document-links';
 import { CompleteFileDropExtension } from './file-drop-extension';
 import { PdfEmbedExtension } from './pdf-embed-extension';
 
@@ -31,9 +35,11 @@ export class EditorView extends ShadowlessElement {
   private mode: DocMode = 'page';
   private scope?: BlockStdScope;
   private referenceSubscription?: Subscription;
+  private navigation = 0;
 
   setContext(store: Store, mode: DocMode, refreshReferences = false) {
     if (this.store === store && this.mode === mode && !refreshReferences) return;
+    this.navigation++;
     this.scope?.selection.clear();
     this.store = store;
     this.mode = mode;
@@ -48,10 +54,11 @@ export class EditorView extends ShadowlessElement {
       EditorSettingExtension({ setting$: signal({}) }),
       ParseDocUrlExtension({
         parseDocUrl: url => {
-          const docId = documentIdFromUrl(url, location.origin);
-          return docId ? { docId } : undefined;
+          const reference = documentReferenceFromUrl(url, location.origin);
+          return reference ? { docId: reference.pageId, ...reference.params } : undefined;
         },
       }),
+      GenerateDocUrlExtension({ generateDocUrl: (id, params) => new URL(documentUrl(id, params), location.origin).href }),
       DocModeExtension({
         getEditorMode: () => this.mode,
         setEditorMode: value => {
@@ -79,14 +86,35 @@ export class EditorView extends ShadowlessElement {
     this.scope.get(FileSizeLimitProvider).maxFileSize = MAX_ATTACHMENT_BYTES;
     this.referenceSubscription = this.scope
       .get(RefNodeSlotsProvider)
-      .docLinkClicked.subscribe(({ pageId }) => {
-        this.dispatchEvent(new CustomEvent('doc-change', { detail: pageId }));
+      .docLinkClicked.subscribe(({ pageId, params, host }) => {
+        if (host !== this.scope?.host && !this.scope?.host.contains(host)) return;
+        this.dispatchEvent(new CustomEvent('doc-change', { detail: { pageId, params: referenceParams(params) } }));
       });
     this.requestUpdate();
   }
 
   get std() {
     return this.scope;
+  }
+  async focusReference(value: DocumentReferenceParams) {
+    const scope = this.scope, navigation = ++this.navigation, params = referenceParams(value);
+    await this.updateComplete;
+    if (!scope || scope !== this.scope || navigation !== this.navigation) return;
+    await scope.host.updateComplete;
+    // Allow the native root, notes and anchoring widget to finish their first render.
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    if (scope !== this.scope || navigation !== this.navigation || !this.isConnected) return;
+    const mode = this.mode;
+    const ids = mode === 'edgeless' ? params.elementIds ?? params.blockIds : params.blockIds;
+    const id = ids?.[0] ?? params.databaseRowId ?? params.databaseId;
+    if (id) {
+      const exists = mode === 'edgeless' ? scope.get(GfxControllerIdentifier).getElementById(id) : scope.view.getBlock(id);
+      if (!exists) return false;
+      scope.selection.set([new HighlightSelection({ ...params, mode, ...mode === 'edgeless' ? { elementIds: [id] } : { blockIds: [id] } })]);
+    } else if (mode === 'edgeless' && params.xywh) {
+      scope.get(GfxControllerIdentifier).viewport.setViewportByBound(Bound.deserialize(params.xywh), [20, 20, 100, 20]);
+    }
+    return true;
   }
   override disconnectedCallback() {
     this.scope?.selection.clearRemote();

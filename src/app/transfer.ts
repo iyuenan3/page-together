@@ -159,7 +159,7 @@ async function importFiles(workspace: ProductionWorkspace, current: ProductionDo
       await doc.prepare(); created.push(doc);
       remapDocumentReferences(snapshot.blocks, ids); snapshot.meta.id = doc.id;
       if (!canEdit(workspace.member.role) || doc.sync.isBlocked) throw new Error('权限或文档状态已变化，导入暂停，已创建内容保留供处理');
-      const result = await job.snapshotToDoc(snapshot);
+      const result = await doc.importSnapshot(() => job.snapshotToDoc(snapshot));
       if (!result || doc.yBlocks.size !== countBlocks(snapshot.blocks)) throw new Error('导入未完整完成，已创建内容保留，请检查后重试');
       workspace.meta.setDocMeta(result.id, { title: snapshot.meta.title });
     }

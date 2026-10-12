@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 import wasm from 'vite-plugin-wasm';
 import { blockSuiteRuntimeImports } from './scripts/blocksuite-runtime-imports.mjs';
 import { pdfAssets } from './scripts/pdf-assets.mjs';
+import { nativeFilterGroupPath, nativeNumberCellPath, patchNativeFilterGroups, patchNativeNumberCell } from './scripts/native-data-view-compatibility';
 
 const packageDirectory = new URL('./node_modules/@blocksuite/', import.meta.url);
 const sourcePackages = readdirSync(packageDirectory).filter(name => {
@@ -15,7 +16,15 @@ const sourcePackages = readdirSync(packageDirectory).filter(name => {
 });
 
 export default defineConfig({
-  plugins: [wasm(), vanillaExtractPlugin(), pdfAssets()],
+  plugins: [{
+    name: 'blocksuite-native-data-view-compatibility', enforce: 'pre',
+    transform(source, id) {
+      const file = id.split('?')[0];
+      if (!file.endsWith(nativeFilterGroupPath) && !file.endsWith(nativeNumberCellPath)) return;
+      const { version } = JSON.parse(readFileSync(new URL('data-view/package.json', packageDirectory), 'utf8'));
+      return { code: file.endsWith(nativeFilterGroupPath) ? patchNativeFilterGroups(source, version) : patchNativeNumberCell(source, version), map: null };
+    },
+  }, wasm(), vanillaExtractPlugin(), pdfAssets()],
   resolve: { dedupe: ['yjs', 'lit', '@preact/signals-core'] },
   esbuild: { target: 'es2022' },
   // The WASM plugin sets the optimizer target to esnext. Browsers still need

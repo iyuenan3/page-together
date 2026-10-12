@@ -2,13 +2,12 @@ import { AdapterPanel } from '@blocksuite/affine/fragments/adapter-panel';
 import { FramePanel } from '@blocksuite/affine/fragments/frame-panel';
 import { OutlinePanel } from '@blocksuite/affine/fragments/outline';
 import type { DocMode } from '@blocksuite/affine/model';
-import { FeatureFlagService } from '@blocksuite/affine/shared/services';
 import { Text } from '@blocksuite/affine/store';
 import '@toeverything/theme/style.css';
 import 'katex/dist/katex.min.css';
 import * as Y from 'yjs';
 import { canEdit, type DocumentInfo, type Member } from '../../shared/protocol';
-import { documentIdFromUrl } from '../../shared/document-links';
+import { documentIdFromUrl, documentReferenceFromUrl, documentUrl, referenceParams, type DocumentReference } from '../../shared/document-links';
 import { EditorView } from '../editor/editor';
 import { api, RequestError } from './api';
 import { LocalPersistence } from './local';
@@ -238,20 +237,29 @@ function updatePanel() {
   else if (mode === 'edgeless') { const panel = new FramePanel(); panel.host = editor.std.host; target.replaceChildren(panel); }
   else target.textContent = '切换到画板后查看画框。';
 }
-async function selectDocument(doc: ProductionDoc) {
+async function selectDocument(doc: ProductionDoc, reference?: DocumentReference, pushHistory = true) {
   const selected = ++selection;
+  const active = workspace;
   await doc.prepare();
-  if (selected !== selection || !workspace) return;
+  if (selected !== selection || !active || workspace !== active || active.getDoc(doc.id) !== doc) return;
   const store = doc.getStore(); store.load();
   if (!store.root) throw new Error('文档正文尚未初始化，请稍后重新打开或联系管理者');
   if (current !== doc) current?.sync.presence?.setActive(false);
   current = doc;
-  if (documentIdFromUrl(location.href, location.origin) !== doc.id) history.pushState(null, '', '/?doc=' + encodeURIComponent(doc.id));
+  const params = referenceParams(reference?.params);
+  if (reference) mode = params.mode ?? (params.elementIds?.length || params.xywh ? 'edgeless' : 'page');
+  if (pushHistory && (reference || documentIdFromUrl(location.href, location.origin) !== doc.id)) {
+    const url = documentUrl(doc.id, params);
+    if (location.pathname + location.search !== url) history.pushState(null, '', url);
+  }
   doc.sync.presence?.setActive(true);
   root.querySelector('#empty-space')?.remove();
-  store.get(FeatureFlagService).setFlag('enable_advanced_block_visibility', true);
-  store.get(FeatureFlagService).setFlag('enable_callout', true);
-  editor!.setContext(store, mode); renderDocuments(); updatePanel(); await saveStatus();
+  updateModeButtons(); editor!.setContext(store, mode); renderDocuments(); updatePanel(); await saveStatus();
+  if (reference && selected === selection && await editor!.focusReference(params) === false && selected === selection) report(new Error('定位目标已删除或无法显示，已打开目标文档'));
+}
+function updateModeButtons() {
+  root.querySelector('#page-mode')?.setAttribute('aria-pressed', String(mode === 'page'));
+  root.querySelector('#edgeless-mode')?.setAttribute('aria-pressed', String(mode === 'edgeless'));
 }
 async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   if (session.paused) {
@@ -292,11 +300,11 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
     }).catch(report);
   };
   for (const value of ['page', 'edgeless'] as const) root.querySelector<HTMLButtonElement>('#' + value + '-mode')!.onclick = () => {
-    mode = value; root.querySelector('#page-mode')!.setAttribute('aria-pressed', String(mode === 'page')); root.querySelector('#edgeless-mode')!.setAttribute('aria-pressed', String(mode === 'edgeless'));
+    mode = value; updateModeButtons();
     if (current) editor!.setContext(current.getStore(), mode);
   };
-  editor.addEventListener('mode-change', event => { mode = (event as CustomEvent<DocMode>).detail; if (current) editor!.setContext(current.getStore(), mode); });
-  editor.addEventListener('doc-change', event => { const doc = workspace!.getDoc((event as CustomEvent<string>).detail); if (doc) void selectDocument(doc).catch(report); else report(new Error('引用文档已删除或当前无法访问')); });
+  editor.addEventListener('mode-change', event => { mode = (event as CustomEvent<DocMode>).detail; updateModeButtons(); if (current) editor!.setContext(current.getStore(), mode); });
+  editor.addEventListener('doc-change', event => { const reference = (event as CustomEvent<DocumentReference>).detail, doc = workspace!.getDoc(reference.pageId); if (doc) void selectDocument(doc, reference).catch(report); else report(new Error('引用文档已删除或当前无法访问')); });
   editor.addEventListener('context-ready', updatePanel);
   for (const kind of ['outline', 'frame', 'adapter'] as const) root.querySelector<HTMLButtonElement>('#' + kind + '-panel')!.onclick = () => { panelKind = kind; root.querySelector<HTMLDivElement>('#panel-region')!.hidden = false; updatePanel(); };
   root.querySelector<HTMLButtonElement>('#close-panel')!.onclick = () => { panelKind = undefined; root.querySelector<HTMLDivElement>('#panel-region')!.hidden = true; root.querySelector('#panel-content')!.replaceChildren(); };
@@ -333,9 +341,9 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   if (session.member.role === 'manage') root.querySelector('#management')!.append(button('邀请朋友', () => inviteMember()), button('成员管理', members), button('回收站', trash));
   root.querySelector('#local-tools')!.append(button('附件与离线缓存', () => showAttachments(workspace!, current)), button('查看离线稿与人工合并', () => showDrafts(workspace!, current)), button('导出本机内容与离线稿', exportLocal));
   renderDocuments();
-  const requested = documentIdFromUrl(location.href, location.origin);
+  const reference = documentReferenceFromUrl(location.href, location.origin), requested = reference?.pageId;
   const first = requested ? workspace.getDoc(requested) : workspace.docs.values().next().value;
-  if (first) await selectDocument(first);
+  if (first) await selectDocument(first, reference, false);
   else { const empty = document.createElement('p'); empty.id = 'empty-space'; empty.textContent = requested ? '引用的文档不存在或已移入回收站，请选择其他文档。' : '空间中还没有文档。'; root.querySelector('#editor-region')!.append(empty); }
   void workspace.blobs.flush(); await saveStatus();
 }
@@ -361,8 +369,8 @@ window.addEventListener('beforeunload', event => {
 });
 window.addEventListener('online', () => { if (workspace) { void workspace.refresh().catch(report); void workspace.blobs.flush(); } });
 window.addEventListener('popstate', () => {
-  const id = documentIdFromUrl(location.href, location.origin), doc = id && workspace?.getDoc(id);
-  if (doc) void selectDocument(doc).catch(report);
+  const reference = documentReferenceFromUrl(location.href, location.origin), id = reference?.pageId, doc = id && workspace?.getDoc(id);
+  if (doc) void selectDocument(doc, reference, false).catch(report);
   else if (id) report(new Error('引用的文档不存在或已移入回收站'));
 });
 void bootstrap().catch(error => showLogin(errorMessage(error)));

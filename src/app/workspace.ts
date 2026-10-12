@@ -7,6 +7,7 @@ import {
   type RemoveStoreOptions, type Store, Text, type Workspace, type WorkspaceMeta, type YBlock,
 } from '@blocksuite/affine/store';
 import { BlobEngine } from '@blocksuite/affine/sync';
+import { FeatureFlagService, WriterInfoServiceExtension } from '@blocksuite/affine/shared/services';
 import { Subject } from 'rxjs';
 import { Awareness } from 'y-protocols/awareness.js';
 import * as Y from 'yjs';
@@ -58,6 +59,7 @@ export class ProductionDoc implements Doc {
   private container: StoreContainer;
   private stores = new Set<Store>();
   private preparation?: Promise<void>;
+  private importingSnapshot = false;
   ready = false;
   loaded = false;
   constructor(readonly workspace: ProductionWorkspace, readonly record: DocumentInfo, private creation?: Promise<unknown>) {
@@ -91,8 +93,16 @@ export class ProductionDoc implements Doc {
     void this.prepare().catch(error => this.workspace.report(error));
   }
   getStore(options: GetStoreOptions = {}) {
-    const store = this.container.getStore({ ...options, id: options.id ?? this.id, readonly: options.readonly ?? !canEdit(this.workspace.member.role), extensions: [...this.workspace.extensions, ...options.extensions ?? []] });
+    const store = this.container.getStore({ ...options, id: options.id ?? this.id, readonly: options.readonly ?? !canEdit(this.workspace.member.role), extensions: [...this.workspace.extensions, ...options.extensions ?? [],
+      WriterInfoServiceExtension({ getWriterInfo: () => this.importingSnapshot ? null : { id: this.workspace.member.id, name: this.workspace.member.nickname } })] });
+    const flags = store.get(FeatureFlagService);
+    for (const flag of ['enable_advanced_block_visibility', 'enable_callout', 'enable_database_number_formatting'] as const) if (!flags.getFlag(flag)) flags.setFlag(flag, true);
     this.stores.add(store); return store;
+  }
+  async importSnapshot<T>(apply: () => Promise<T>) {
+    // Native block creation otherwise stamps over the source's historical metadata.
+    this.importingSnapshot = true;
+    try { return await apply(); } finally { this.importingSnapshot = false; }
   }
   setReadonly(readonly: boolean) { for (const store of this.stores) store.readonly = readonly; }
   removeStore(options: RemoveStoreOptions) { this.container.removeStore(options); }

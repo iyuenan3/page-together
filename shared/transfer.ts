@@ -52,12 +52,32 @@ export function packTransfer(files: Map<string, Uint8Array>, limits = TRANSFER_L
   if (zip.byteLength > limits.total) throw new Error('压缩包超过导出容量限制，请分批导出');
   return zip;
 }
-type SnapshotBlock = { flavour: string; props: Record<string, unknown>; children: SnapshotBlock[] };
-/** 0.22.4's progress formatter calls toString on empty values. Text adapters
- * should render those as empty cells without changing the live/native data. */
+type SnapshotBlock = { id?: string; flavour: string; props: Record<string, unknown>; children: SnapshotBlock[] };
+/** Normalize only the export copy for 0.22.4's static table adapters. */
 export function prepareTextSnapshot(block: SnapshotBlock) {
   if (block.flavour === 'affine:database' && block.props.cells && typeof block.props.cells === 'object') {
-    for (const row of Object.values(block.props.cells as Record<string, Record<string, { value?: unknown }>>)) {
+    const cells = block.props.cells as Record<string, Record<string, { columnId?: string; value?: unknown }>>;
+    // Native processTable always emits the title value first, even after users
+    // reorder fields. Match its headers to those values.
+    if (Array.isArray(block.props.columns)) {
+      const columns = block.props.columns as { id: string; type: string; data?: unknown }[];
+      block.props.columns = [...columns.filter(column => column.type === 'title'), ...columns.filter(column => column.type !== 'title')];
+      for (const column of columns) if (column.type === 'created-time') {
+        // Native static adapters omit computed properties. Materialize this one
+        // as text with an explicit timezone, leaving native backup data intact.
+        column.type = 'rich-text'; column.data = {};
+        for (const child of block.children) {
+          const createdAt = child.props['meta:createdAt'];
+          if (!child.id || typeof createdAt !== 'number' || !Number.isFinite(createdAt)) continue;
+          const date = new Date(createdAt + 8 * 60 * 60 * 1000);
+          if (!Number.isFinite(date.getTime())) continue;
+          const value = date.toISOString().replace('T', ' ').replace('Z', ' +08:00');
+          (cells[child.id] ??= {})[column.id] = { columnId: column.id, value: { '$blocksuite:internal:text$': true, delta: [{ insert: value }] } };
+        }
+      }
+    }
+    // Empty progress cells otherwise call toString on an undefined value.
+    for (const row of Object.values(cells)) {
       for (const [id, cell] of Object.entries(row)) if (cell.value == null) delete row[id];
     }
   }
