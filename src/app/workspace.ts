@@ -6,14 +6,15 @@ import {
   type Doc, type DocMeta, type DocsPropertiesMeta, type GetStoreOptions,
   type RemoveStoreOptions, type Store, Text, type Workspace, type WorkspaceMeta, type YBlock,
 } from '@blocksuite/affine/store';
-import { BlobEngine, type BlobSource } from '@blocksuite/affine/sync';
+import { BlobEngine } from '@blocksuite/affine/sync';
 import { Subject } from 'rxjs';
 import { Awareness } from 'y-protocols/awareness.js';
 import * as Y from 'yjs';
 import { canEdit, type DocumentInfo, type Member } from '../../shared/protocol';
-import { api, RequestError } from './api';
-import { LocalPersistence } from './local';
+import { api } from './api';
+import { LocalPersistence, type CachedBlob } from './local';
 import { DocumentSync } from './sync';
+import { OfflineBlobSource } from './blobs';
 
 class WorkspaceMetaAdapter implements WorkspaceMeta {
   docMetaAdded = new Subject<string>();
@@ -45,47 +46,6 @@ class WorkspaceMetaAdapter implements WorkspaceMeta {
   initialize() {}
 }
 
-class OfflineBlobSource implements BlobSource {
-  name = 'authenticated-indexeddb-blobs';
-  private flushing = false;
-  constructor(private workspace: ProductionWorkspace) {}
-  get readonly() { return !canEdit(this.workspace.member.role); }
-  async get(key: string) {
-    const local = await this.workspace.local.getBlob(this.workspace.epoch, key);
-    if (local) return local;
-    const response = await fetch('/api/blobs/' + encodeURIComponent(key), { credentials: 'same-origin', cache: 'no-store' });
-    if (response.status === 404) return null;
-    if (!response.ok) throw new RequestError(response.status, 'blob_read_failed');
-    const value = await response.blob();
-    try { await this.workspace.local.setBlob(this.workspace.epoch, key, value, true); }
-    catch (error) { this.workspace.report(error); }
-    return value;
-  }
-  async set(key: string, value: Blob) {
-    if (this.readonly) throw new Error('read_only');
-    if (value.size > 50_000_000) throw new Error('单个附件不能超过 50 MB');
-    await this.workspace.local.setBlob(this.workspace.epoch, key, value, false, this.workspace.member.accessRevision);
-    this.workspace.changed(); void this.flush(); return key;
-  }
-  async delete(_key: string) { throw new Error('附件暂不永久删除'); }
-  async list() { return (await this.workspace.local.blobs(this.workspace.epoch)).map(row => row.blobKey); }
-  async flush() {
-    if (this.flushing || this.readonly) return;
-    this.flushing = true;
-    try {
-      const session = await api<{ epoch: string; member: Member }>('session');
-      if (session.member.id !== this.workspace.local.memberId || session.epoch !== this.workspace.epoch || !canEdit(session.member.role)) return;
-      for (const record of await this.workspace.local.blobs(this.workspace.epoch, true)) {
-        if (record.blockedReason || record.accessRevision !== session.member.accessRevision) continue;
-        const response = await fetch('/api/blobs/' + encodeURIComponent(record.blobKey), { method: 'PUT', credentials: 'same-origin', body: record.data });
-        if (!response.ok) throw new RequestError(response.status, 'blob_upload_failed');
-        await this.workspace.local.acknowledgeBlob(this.workspace.epoch, record.blobKey);
-      }
-    } catch (error) { this.workspace.report(error); }
-    finally { this.flushing = false; this.workspace.changed(); }
-  }
-}
-
 export class ProductionDoc implements Doc {
   readonly spaceDoc: Y.Doc;
   readonly rootDoc: Y.Doc;
@@ -107,17 +67,16 @@ export class ProductionDoc implements Doc {
     this.container = new StoreContainer(this);
     this.sync = new DocumentSync(this.spaceDoc, { docId: record.id, epoch: workspace.epoch, generation: record.generation }, workspace.local, workspace.member.accessRevision, this.awarenessStore.awareness);
     this.sync.presence!.onChange = () => workspace.presenceChanged();
-    this.sync.onState = () => workspace.changed();
-    this.sync.onAccess = member => {
-      workspace.member = member;
-      this.sync.presence?.identity(member);
-      for (const doc of workspace.docs.values()) doc.setReadonly(!canEdit(member.role));
-      workspace.accessChanged(member);
-      workspace.changed();
+    this.sync.onState = () => { workspace.changed(); workspace.blobs.schedule(); };
+    this.sync.onAccess = member => workspace.updateAccess(member);
+    this.sync.beforePush = async () => {
+      const keys = this.blobKeys();
+      return !(await workspace.local.blobs(workspace.epoch, true)).some(row => keys.has(row.blobKey)) && ![...workspace.blobs.memory.values()].some(row => !row.saved && keys.has(row.blobKey));
     };
     this.sync.onCatalog = () => void workspace.refresh().catch(error => workspace.report(error));
   }
   get id() { return this.record.id; }
+  blobKeys() { return new Set([...this.yBlocks.values()].flatMap(block => { const key = block.get('prop:sourceId'); return typeof key === 'string' && key ? [key] : []; })); }
   get meta() { return this.workspace.meta.getDocMeta(this.id); }
   prepare() {
     return this.preparation ??= (this.creation ?? Promise.resolve()).then(() => this.sync.start(!this.creation))
@@ -181,6 +140,51 @@ export class ProductionWorkspace implements Workspace {
     this.cacheCatalog(); this.slots.docListUpdated.next(); return doc;
   }
   getDoc(id: string) { return this.docs.get(id) ?? null; }
+  updateAccess(member: Member) {
+    this.member = member;
+    for (const doc of this.docs.values()) { doc.setReadonly(!canEdit(member.role)); doc.sync.presence?.identity(member); }
+    this.accessChanged(member); this.changed();
+  }
+  blobScope(key: string) {
+    for (const doc of this.docs.values()) if (!doc.sync.isBlocked && doc.blobKeys().has(key)) return doc.sync.scope;
+    return undefined;
+  }
+  blobMetadata(key: string) {
+    for (const doc of [...this.docs.values(), ...this.retired]) for (const block of doc.yBlocks.values()) if (block.get('prop:sourceId') === key) {
+      const name = block.get('prop:name'), type = block.get('prop:type');
+      return { name: typeof name === 'string' ? name : undefined, type: typeof type === 'string' ? type : undefined };
+    }
+    return {};
+  }
+  uploaded() { for (const doc of this.docs.values()) if (doc.loaded || doc.ready) void doc.sync.retryLocalSave(); }
+  private attachmentTarget(doc: ProductionDoc) {
+    if (!canEdit(this.member.role) || this.docs.get(doc.id) !== doc || doc.sync.isBlocked || doc.sync.hasStorageFailure) throw new Error('请先核验编辑权限、读取当前云端文档并处理保存状态');
+  }
+  private appendAttachment(doc: ProductionDoc, row: { blobKey: string; data: Blob; name?: string; type?: string }) {
+    this.attachmentTarget(doc);
+    const store = doc.getStore(); store.load();
+    if (!store.root) throw new Error('当前文档尚未加载');
+    store.captureSync();
+    store.transact(() => {
+      const note = store.root!.children.find(block => block.flavour === 'affine:note');
+      const parent = note?.id ?? store.addBlock('affine:note', {}, store.root!.id);
+      store.addBlock('affine:attachment', { sourceId: row.blobKey, name: row.name || '附件', size: row.data.size, type: row.type || row.data.type || 'application/octet-stream' }, parent);
+    });
+    this.blobs.schedule();
+  }
+  async addAttachment(doc: ProductionDoc, file: File) {
+    this.attachmentTarget(doc);
+    const key = await this.blobSync.set(file);
+    this.appendAttachment(doc, { blobKey: key, data: file, name: file.name, type: file.type });
+    await doc.sync.settled();
+  }
+  async resubmitAttachment(doc: ProductionDoc, row: CachedBlob) {
+    await this.blobs.session(true); await this.refresh(); this.attachmentTarget(doc);
+    if (await this.local.checkAccess(doc.sync.scope, this.member.accessRevision)) throw new Error('请先保留离线稿并读取当前云端文档，再重新提交附件');
+    const record = await this.blobs.resubmit(row, doc.sync.scope);
+    this.appendAttachment(doc, record); await doc.sync.settled();
+    if (doc.sync.hasStorageFailure) throw new Error('附件已保存，但正文仍在内存，请保留页面并重试本机保存');
+  }
   async appendDraftText(doc: ProductionDoc, text: string) {
     if (!text.trim() || text.length > 100_000) throw new Error('请填写要合入的文字，单次最多 10 万字');
     const session = await api<{ member: Member; epoch: string }>('session');
@@ -240,10 +244,11 @@ export class ProductionWorkspace implements Workspace {
     catch { this.report(new Error('本机目录保存失败')); }
   }
   dispose() {
+    this.blobs.dispose();
     const docs = [...this.docs.values(), ...this.retired];
     for (const doc of docs) doc.dispose();
     this.doc.destroy();
-    void Promise.allSettled(docs.map(doc => doc.sync.settled())).then(() => this.local.close()).catch(this.report);
+    void Promise.allSettled([this.blobs.settled(), ...docs.map(doc => doc.sync.settled())]).then(() => this.local.close()).catch(this.report);
     this.slots.docListUpdated.complete();
   }
 }

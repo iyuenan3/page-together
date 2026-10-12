@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { request as httpRequest } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import * as Y from 'yjs';
 import { backup, restore } from '../server/backup.js';
 import { hash, Store } from '../server/store.js';
-import { fixture, Peer } from './helpers.js';
+import { attachmentHeaders, fixture, Peer } from './helpers.js';
+import { blobWriteHeaders } from '../shared/attachments.js';
 
 const encoded = (value: Uint8Array) => Buffer.from(value).toString('base64');
 async function open(peer: Peer, scope: { docId: string; epoch: string; generation: number }, doc = new Y.Doc()) {
@@ -118,10 +120,11 @@ test('document deletion, restore generation and revoked live connections', async
 
 test('attachment content addressing, limits, access checks and recoverable backup', async t => {
   const f = await fixture({ maxBlobBytes: 64 }); t.after(f.close);
+  const headers = await attachmentHeaders(f);
   const viewer = await f.member('view');
   const bytes = Buffer.from('私有测试附件'), key = createHash('sha256').update(bytes).digest('base64').replace(/\+/g, '-').replace(/\//g, '_');
   async function upload(cookie: string, payload: Buffer, blobKey = key) {
-    return fetch(f.origin + '/api/blobs/' + encodeURIComponent(blobKey), { method: 'PUT', headers: { Cookie: cookie, Origin: f.origin }, body: payload });
+    return fetch(f.origin + '/api/blobs/' + encodeURIComponent(blobKey), { method: 'PUT', headers: { ...headers, Cookie: cookie, Origin: f.origin }, body: payload });
   }
   assert.equal((await upload(viewer.cookie, bytes)).status, 403);
   assert.equal((await upload(f.owner, Buffer.alloc(65))).status, 413);
@@ -246,9 +249,10 @@ test('snapshot compaction preserves Yjs data and rejected large updates leave it
 
 test('quota rejection cleans unpublished attachments and releases the upload slot', async t => {
   const f = await fixture({ maxBlobBytes: 64, blobQuotaBytes: 4 }); t.after(f.close);
+  const headers = await attachmentHeaders(f);
   async function put(bytes: Buffer) {
     const key = createHash('sha256').update(bytes).digest('base64').replace(/\+/g, '-').replace(/\//g, '_');
-    return fetch(f.origin + '/api/blobs/' + encodeURIComponent(key), { method: 'PUT', headers: { Cookie: f.owner, Origin: f.origin }, body: bytes });
+    return fetch(f.origin + '/api/blobs/' + encodeURIComponent(key), { method: 'PUT', headers: { ...headers, Cookie: f.owner, Origin: f.origin }, body: bytes });
   }
   assert.equal((await put(Buffer.from('too big'))).status, 413);
   assert.deepEqual(await readdir(join(f.directory, 'blobs')), []);
@@ -258,13 +262,77 @@ test('quota rejection cleans unpublished attachments and releases the upload slo
 
 test('default attachment limit accepts 50 MB and rejects 50 MB plus one byte', async t => {
   const f = await fixture(); t.after(f.close);
+  const headers = await attachmentHeaders(f);
   const bytes = Buffer.alloc(50_000_000, 7);
   const key = createHash('sha256').update(bytes).digest('base64').replace(/\+/g, '-').replace(/\//g, '_');
   async function put(body: Buffer) {
-    return fetch(f.origin + '/api/blobs/' + encodeURIComponent(key), { method: 'PUT', headers: { Cookie: f.owner, Origin: f.origin }, body });
+    return fetch(f.origin + '/api/blobs/' + encodeURIComponent(key), { method: 'PUT', headers: { ...headers, Cookie: f.owner, Origin: f.origin }, body });
   }
   const accepted = await put(bytes); assert.equal(accepted.status, 200);
   assert.equal((await accepted.json() as { size: number }).size, 50_000_000);
   assert.equal((await put(Buffer.alloc(50_000_001))).status, 413);
   assert.equal((await readdir(join(f.directory, 'blobs'))).length, 1);
+});
+
+test('streamed uploads recheck permission history and document lifecycle after receiving bytes', async t => {
+  for (const transition of ['permission', 'deleted', 'restored'] as const) await t.test(transition, async t => {
+    const f = await fixture(); t.after(f.close); const editor = await f.member('edit');
+    const headers = await attachmentHeaders(f, editor.cookie), bytes = Buffer.from('上传期间状态变化的完整附件');
+    const key = createHash('sha256').update(bytes).digest('base64url') + '=';
+    const request = httpRequest(f.origin + '/api/blobs/' + encodeURIComponent(key), { method: 'PUT', headers: { ...headers, Cookie: editor.cookie, Origin: f.origin, 'Content-Length': bytes.length } });
+    const result = new Promise<{ status: number; code: string }>((resolve, reject) => {
+      request.on('error', reject); request.on('response', response => {
+        let data = ''; response.setEncoding('utf8'); response.on('data', chunk => { data += chunk; });
+        response.on('error', reject); response.on('end', () => resolve({ status: response.statusCode!, code: JSON.parse(data).code }));
+      });
+    });
+    request.write(bytes.subarray(0, 6));
+    // Observe a real partial upload on disk before changing server state.
+    const deadline = Date.now() + 4000; let received = false;
+    while (!received && Date.now() < deadline) {
+      const files = await readdir(join(f.directory, 'blobs'));
+      received = (await Promise.all(files.map(file => stat(join(f.directory, 'blobs', file))))).some(file => file.size === 6);
+      if (!received) await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert(received);
+    if (transition === 'permission') {
+      await f.request('/api/members/' + editor.member.id, f.owner, 'PATCH', { role: 'view', active: true });
+      await f.request('/api/members/' + editor.member.id, f.owner, 'PATCH', { role: 'edit', active: true });
+    } else {
+      await f.request('/api/documents/attachments/trash', f.owner, 'POST');
+      if (transition === 'restored') await f.request('/api/documents/attachments/restore', f.owner, 'POST');
+    }
+    request.end(bytes.subarray(6)); const rejected = await result;
+    assert.equal(rejected.status, 409);
+    assert.equal(rejected.code, transition === 'permission' ? 'access_changed' : transition === 'deleted' ? 'document_deleted' : 'document_generation_changed');
+    assert.deepEqual(f.store.listBlobs(hash(f.owner.split('=')[1])), []);
+    assert.deepEqual(await readdir(join(f.directory, 'blobs')), []);
+  });
+});
+
+test('attachment HTTP writes require the exact current member and scope and downloads reject old epochs', async t => {
+  const f = await fixture(); t.after(f.close); const headers = await attachmentHeaders(f), bytes = Buffer.from('header validation');
+  const key = createHash('sha256').update(bytes).digest('base64url') + '=', session = (await (await f.request('/api/session', f.owner)).json() as { member: { id: string; accessRevision: number } }).member;
+  const context = { memberId: session.id, accessRevision: session.accessRevision, docId: 'attachments', epoch: f.store.epoch, generation: 1 };
+  const put = (extra: Record<string, string>) => fetch(f.origin + '/api/blobs/' + encodeURIComponent(key), { method: 'PUT', headers: { Cookie: f.owner, Origin: f.origin, ...extra }, body: bytes });
+  assert.equal((await put({})).status, 400);
+  for (const changed of [{ memberId: 'wrong' }, { accessRevision: 1 }, { epoch: 'old' }, { generation: 2 }]) assert.equal((await put(blobWriteHeaders({ ...context, ...changed }))).status, 409);
+  assert.equal((await put(headers)).status, 200);
+  assert.equal((await fetch(f.origin + '/api/blobs/' + encodeURIComponent(key), { headers: { Cookie: f.owner, 'X-PageTogether-Epoch': 'old' } })).status, 409);
+});
+
+test('revocation interrupts an existing attachment download stream', async t => {
+  const f = await fixture(); t.after(f.close); const headers = await attachmentHeaders(f), bytes = Buffer.alloc(16_000_000, 9);
+  const key = createHash('sha256').update(bytes).digest('base64url') + '=';
+  assert.equal((await fetch(f.origin + '/api/blobs/' + encodeURIComponent(key), { method: 'PUT', headers: { ...headers, Cookie: f.owner, Origin: f.origin }, body: bytes })).status, 200);
+  const viewer = await f.member('view');
+  const request = httpRequest(f.origin + '/api/blobs/' + encodeURIComponent(key), { headers: { Cookie: viewer.cookie } });
+  const responsePromise = once(request, 'response'); request.end();
+  const [response] = await responsePromise; assert.equal(response.statusCode, 200); response.pause();
+  let received = 0; response.on('data', (chunk: Buffer) => { received += chunk.length; });
+  const closed = new Promise<void>(resolve => { response.on('error', () => {}); response.on('close', resolve); });
+  await f.request('/api/members/' + viewer.member.id, f.owner, 'PATCH', { role: 'view', active: false });
+  response.resume(); await closed;
+  assert(received < bytes.length); assert.equal(response.complete, false);
+  assert.equal((await fetch(f.origin + '/api/blobs/' + encodeURIComponent(key), { headers: { Cookie: viewer.cookie } })).status, 401);
 });

@@ -2,13 +2,19 @@ import { openDB } from 'idb';
 import * as Y from 'yjs';
 import type { DocumentScope } from '../../shared/protocol.js';
 
+export interface CachedBlob {
+  key: string; blobKey: string; epoch: string; data: Blob; saved: boolean;
+  id?: string; name?: string; type?: string; createdAt?: number;
+  accessRevision?: number; blockedReason?: string; scope?: DocumentScope;
+}
+export interface ArchivedBlob extends CachedBlob { archiveId: string; archivedAt: number }
 export const scopeKey = (scope: DocumentScope) => `${scope.epoch}:${scope.generation}:${scope.docId}`;
 // Observe transaction failure immediately, including when an awaited request fails first.
 function observed<T extends { done: Promise<void> }>(transaction: T): T { void transaction.done.catch(() => {}); return transaction; }
 export class LocalPersistence {
   private database;
   constructor(readonly memberId: string) {
-    this.database = openDB('page-together-v1-' + memberId, 2, {
+    this.database = openDB('page-together-v1-' + memberId, 3, {
       upgrade(db, oldVersion) {
         if (oldVersion < 1) {
           db.createObjectStore('documents');
@@ -18,6 +24,7 @@ export class LocalPersistence {
           db.createObjectStore('blobs', { keyPath: 'key' });
         }
         if (oldVersion < 2) db.createObjectStore('access');
+        if (oldVersion < 3) db.createObjectStore('blobDrafts', { keyPath: 'archiveId' });
       },
     });
   }
@@ -92,23 +99,52 @@ export class LocalPersistence {
     await tx.done;
     return keys.map((key, index) => ({ scope: String(key), data: values[index] }));
   }
-  async setBlob(epoch: string, key: string, data: Blob, saved = false, accessRevision?: number) {
+  async setBlob(epoch: string, key: string, data: Blob, saved = false, accessRevision?: number, metadata: Partial<Pick<CachedBlob, 'scope' | 'name' | 'type'>> = {}) {
     const tx = observed((await this.database).transaction('blobs', 'readwrite', { durability: 'strict' }));
-    const previous = await tx.store.get(epoch + ':' + key);
-    await tx.store.put({ key: epoch + ':' + key, blobKey: key, epoch, data, accessRevision: previous?.accessRevision ?? accessRevision, blockedReason: previous?.blockedReason, saved: saved || previous?.saved === true });
+    const previous = await tx.store.get(epoch + ':' + key) as CachedBlob | undefined;
+    const record: CachedBlob = { ...metadata, ...previous, key: epoch + ':' + key, blobKey: key, epoch, data,
+      id: previous?.id ?? crypto.randomUUID(), createdAt: previous?.createdAt ?? Date.now(),
+      accessRevision: previous?.accessRevision ?? accessRevision, saved: saved || previous?.saved === true };
+    await tx.store.put(record);
     await tx.done;
+    return record;
   }
   async getBlob(epoch: string, key: string): Promise<Blob | null> {
     return (await (await this.database).get('blobs', epoch + ':' + key))?.data ?? null;
   }
-  async blobs(epoch?: string, pendingOnly = false): Promise<{ key: string; blobKey: string; epoch: string; data: Blob; saved: boolean; accessRevision?: number; blockedReason?: string }[]> {
+  async blobs(epoch?: string, pendingOnly = false): Promise<CachedBlob[]> {
     return (await (await this.database).getAll('blobs')).filter(row => (!epoch || row.epoch === epoch) && (!pendingOnly || !row.saved));
   }
-  async acknowledgeBlob(epoch: string, key: string) {
+  async acknowledgeBlob(epoch: string, key: string, expectedId?: string) {
     const tx = observed((await this.database).transaction('blobs', 'readwrite', { durability: 'strict' }));
     const record = await tx.store.get(epoch + ':' + key);
-    if (record) { record.saved = true; await tx.store.put(record); }
+    const matches = record && (!expectedId || record.id === expectedId);
+    if (matches) { record.saved = true; await tx.store.put(record); }
     await tx.done;
+    return !!matches;
+  }
+  async bindBlob(epoch: string, key: string, scope: DocumentScope, expectedId?: string) {
+    const tx = observed((await this.database).transaction('blobs', 'readwrite', { durability: 'strict' }));
+    const record = await tx.store.get(epoch + ':' + key) as CachedBlob | undefined;
+    if (record && record.id === expectedId && !record.scope) { record.scope = scope; await tx.store.put(record); }
+    await tx.done; return record;
+  }
+  async blockBlob(epoch: string, key: string, reason: string, expectedId?: string) {
+    const tx = observed((await this.database).transaction('blobs', 'readwrite', { durability: 'strict' }));
+    const record = await tx.store.get(epoch + ':' + key) as CachedBlob | undefined;
+    if (record && (!expectedId || record.id === expectedId) && !record.saved) {
+      record.blockedReason ??= reason; await tx.store.put(record);
+    }
+    await tx.done;
+  }
+  async blobDrafts(): Promise<ArchivedBlob[]> { return (await this.database).getAll('blobDrafts'); }
+  async requeueBlob(original: CachedBlob, scope: DocumentScope, accessRevision: number) {
+    const tx = observed((await this.database).transaction(['blobs', 'blobDrafts'], 'readwrite', { durability: 'strict' }));
+    await tx.objectStore('blobDrafts').put({ ...original, archiveId: crypto.randomUUID(), archivedAt: Date.now() });
+    const key = scope.epoch + ':' + original.blobKey, previous = await tx.objectStore('blobs').get(key) as CachedBlob | undefined;
+    if (previous && previous.id !== original.id) await tx.objectStore('blobDrafts').put({ ...previous, archiveId: crypto.randomUUID(), archivedAt: Date.now() });
+    const record: CachedBlob = { ...original, id: crypto.randomUUID(), key, epoch: scope.epoch, scope, accessRevision, blockedReason: undefined, saved: false, createdAt: Date.now() };
+    await tx.objectStore('blobs').put(record); await tx.done; return record;
   }
   async close() { (await this.database).close(); }
 }

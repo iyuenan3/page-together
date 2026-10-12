@@ -9,6 +9,7 @@ import { ApiError, identifier, requireThat, text } from './errors.js';
 import { hash, Store, type StoreOptions } from './store.js';
 import { PresenceRooms } from './presence.js';
 import { MAX_AWARENESS_BYTES } from '../shared/awareness.js';
+import { UPLOAD_CONTEXT_HEADER, type BlobWriteContext } from '../shared/attachments.js';
 
 interface AppOptions extends StoreOptions {
   directory: string;
@@ -126,6 +127,13 @@ export function createApp(options: AppOptions) {
   }
   async function upload(req: IncomingMessage, res: ServerResponse, session: string, key: string) {
     requireThat(canEdit(store.authenticate(session).role), 403, 'read_only');
+    const rawContext = req.headers[UPLOAD_CONTEXT_HEADER.toLowerCase()];
+    requireThat(typeof rawContext === 'string' && rawContext.length <= 2048, 400, 'upload_context_required');
+    let context: BlobWriteContext;
+    try { context = JSON.parse(rawContext as string); } catch { throw new ApiError(400, 'invalid_upload_context'); }
+    requireThat(context! && typeof context === 'object' && typeof context.epoch === 'string' && context.epoch.length <= 256 && Number.isSafeInteger(context.accessRevision) && context.accessRevision >= 0 && Number.isSafeInteger(context.generation) && context.generation > 0, 400, 'invalid_upload_context');
+    identifier(context!.docId); identifier(context!.memberId);
+    store.authorizeBlobWrite(session, context!);
     requireThat(/^[A-Za-z0-9_-]{43}=$/.test(key), 400, 'invalid_blob_key');
     requireThat(uploads < 2, 429, 'uploads_busy');
     if (req.headers['content-length']) requireThat(Number(req.headers['content-length']) <= store.options.maxBlobBytes, 413, 'attachment_too_large');
@@ -152,7 +160,7 @@ export function createApp(options: AppOptions) {
       await file.close();
       file = undefined;
       // Recheck after all asynchronous file work, before publishing authority.
-      requireThat(canEdit(store.authenticate(session).role), 403, 'read_only');
+      store.authorizeBlobWrite(session, context!);
       try { linkSync(temporary, destination); published = true; }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
@@ -160,7 +168,7 @@ export function createApp(options: AppOptions) {
       }
       const directory = openSync(blobsDirectory, 'r');
       try { fsyncSync(directory); } finally { closeSync(directory); }
-      store.commitBlob(session, key, size, checksum);
+      store.commitBlob(session, key, size, checksum, context!);
       committed = true;
       json(res, 200, { key, size, saved: true });
     } finally {
@@ -242,11 +250,14 @@ export function createApp(options: AppOptions) {
       if (req.method === 'PUT') { await upload(req, res, session, key); return; }
       if (req.method === 'GET') {
         const record = store.blob(session, key);
+        const expectedEpoch = req.headers['x-pagetogether-epoch'];
+        requireThat(expectedEpoch === undefined || expectedEpoch === store.epoch, 409, 'space_epoch_changed');
         requireThat(record, 404, 'blob_not_found');
         res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment', 'Content-Length': record.size, 'Cache-Control': 'no-store' });
         downloads.set(res, session);
-        res.on('close', () => downloads.delete(res));
-        createReadStream(join(blobsDirectory, key)).on('error', () => res.destroy()).pipe(res); return;
+        const file = createReadStream(join(blobsDirectory, key));
+        res.on('close', () => { downloads.delete(res); file.destroy(); });
+        file.on('error', () => res.destroy()).pipe(res); return;
       }
     }
     throw new ApiError(404, 'not_found');

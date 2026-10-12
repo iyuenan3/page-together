@@ -98,3 +98,13 @@ test('pausing after a failed local write preserves the failure warning and the a
   assert.equal(await c.local.checkAccess(c.scope, 1), '权限记录已变化');
   assert.equal(c.doc.getText('body').toString(), '尚未落盘的完整稿'); assert.equal(c.cloud(), '');
 });
+
+test('attachment gating retains document references locally until the blob receipt is durable', async t => {
+  const c = await client(t); let saved = false, checks = 0;
+  c.sync.beforePush = async () => { checks++; return saved; };
+  c.doc.getText('body').insert(0, '包含待上传附件的正文'); await c.sync.settled();
+  await until(() => checks > 0 && c.sync.state === 'local');
+  assert(checks > 0); assert.equal(c.cloud(), ''); assert.equal(c.pushes(), 0); assert((await c.local.pending(c.scope)).length > 0);
+  saved = true; await c.sync.retryLocalSave(); await until(() => c.sync.state === 'cloud');
+  assert.equal(c.cloud(), '包含待上传附件的正文'); assert.equal((await c.local.pending(c.scope)).length, 0);
+});

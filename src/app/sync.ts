@@ -30,6 +30,7 @@ export class DocumentSync {
   onState = (_state: SaveState, _reason: string) => {};
   onCatalog = () => {};
   onAccess = (_member: Member) => {};
+  beforePush?: () => Promise<boolean>;
   readonly presence?: DocumentPresence;
   constructor(
     readonly doc: Y.Doc,
@@ -218,6 +219,7 @@ export class DocumentSync {
       if (reason) { await this.block(reason); return; }
       const pending = await this.local.pending(this.scope);
       if (!pending.length) { if (this.sequence === sequence) this.setState('cloud'); return; }
+      if (this.beforePush && !await this.beforePush()) { this.setState('local', '有附件仍保留在此设备，请等待上传或处理附件状态'); return; }
       const update = Y.mergeUpdates(pending.map(row => row.update));
       const digest = await crypto.subtle.digest('SHA-256', update as Uint8Array<ArrayBuffer>);
       const updateHash = Array.from(new Uint8Array(digest), value => value.toString(16).padStart(2, '0')).join('');

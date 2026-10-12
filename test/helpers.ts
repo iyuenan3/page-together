@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import { createApp } from '../server/app.js';
 import type { ServerMessage } from '../shared/protocol.js';
+import { blobWriteHeaders } from '../shared/attachments.js';
 
 export async function fixture(options: Partial<Parameters<typeof createApp>[0]> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'page-together-test-'));
@@ -64,4 +65,10 @@ export class Peer {
     });
   }
   close() { this.ws.terminate(); }
+}
+
+export async function attachmentHeaders(f: Awaited<ReturnType<typeof fixture>>, cookie = f.owner, docId = 'attachments') {
+  await f.request('/api/documents', f.owner, 'POST', { id: docId, title: docId });
+  const { member } = await (await f.request('/api/session', cookie)).json() as { member: { id: string; accessRevision: number } };
+  return blobWriteHeaders({ docId, epoch: f.store.epoch, generation: 1, memberId: member.id, accessRevision: member.accessRevision });
 }

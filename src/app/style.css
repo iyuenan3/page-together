@@ -30,3 +30,10 @@ dialog.drafts-dialog { width: min(1400px, 96vw); max-width: 96vw; height: 92dvh;
 .draft-notice { color: #935a24; }
 @media (max-width: 700px) { .drafts-dialog > .draft-panes, .drafts-dialog > .draft-differences { grid-template-columns: 1fr; } }
 @media print { footer { display: none; } }
+.attachments-dialog { width: min(900px, 94vw); max-width: 94vw; max-height: 90dvh; overflow: auto; }
+.attachments-dialog > .attachment-list { display: grid; align-items: stretch; }
+.attachment-row { border: 1px solid #d2dcd2; border-radius: 6px; padding: 12px; min-width: 0; }
+.attachment-row h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
+.attachment-row p, .attachments-dialog > p { font-size: 13px; line-height: 1.7; }
+#attachment-files { display: none; }
+footer { flex-wrap: wrap; }

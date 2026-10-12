@@ -14,6 +14,7 @@ import { LocalPersistence } from './local';
 import { toBase64, type SaveState } from './sync';
 import { ProductionWorkspace, type ProductionDoc } from './workspace';
 import { showDrafts } from './drafts';
+import { downloadAttachment, showAttachments } from './attachments';
 import '../lab/style.css';
 import './style.css';
 
@@ -85,17 +86,17 @@ async function exportLocal() {
   const local = workspace?.local ?? new LocalPersistence(session.member.id);
   try {
     const memory = workspace ? [...new Set([...workspace.docs.values(), ...workspace.retired, ...current ? [current] : []])].map(doc => ({ scope: doc.sync.scope, data: toBase64(Y.encodeStateAsUpdate(doc.spaceDoc)) })) : [];
-    const [documentResult, draftResult, blobResult] = await Promise.allSettled([local.documents(), local.drafts(), local.blobs()]);
+    const [documentResult, draftResult, blobResult, blobDraftResult] = await Promise.allSettled([local.documents(), local.drafts(), local.blobs(), local.blobDrafts()]);
     const documents = documentResult.status === 'fulfilled' ? documentResult.value.map(row => ({ ...row, data: toBase64(row.data) })) : [];
     const drafts = draftResult.status === 'fulfilled' ? draftResult.value.map(row => ({ ...row, data: toBase64(row.data) })) : [];
-    const attachments = blobResult.status === 'fulfilled' ? blobResult.value : [];
-    const readErrors = [documentResult, draftResult, blobResult].flatMap(result => result.status === 'rejected' ? [errorMessage(result.reason)] : []);
+    const attachments = [...workspace?.blobs.memory.values() ?? [], ...blobResult.status === 'fulfilled' ? blobResult.value : [], ...blobDraftResult.status === 'fulfilled' ? blobDraftResult.value : []];
+    const readErrors = [documentResult, draftResult, blobResult, blobDraftResult].flatMap(result => result.status === 'rejected' ? [errorMessage(result.reason)] : []);
     if (!memory.length && !documents.length && !drafts.length && !attachments.length) throw new Error('此设备没有可读取的本机内容，请保留当前页面后重试');
     download('pageTogether-local-drafts.json', new Blob([JSON.stringify({ format: 1, documents, drafts, memory, readErrors })], { type: 'application/json' }));
     if (attachments.length) {
       const box = dialog('离线附件');
       const note = document.createElement('p'); note.textContent = '正文与离线稿已导出。附件保留在此设备，可分别下载。'; box.append(note);
-      for (const row of attachments) box.append(button('下载附件 ' + row.blobKey.slice(0, 10), () => download(row.blobKey + '.bin', row.data)));
+      for (const row of attachments) box.append(button('下载附件 ' + (row.name || row.blobKey.slice(0, 10)), () => downloadAttachment(row)));
       box.append(button('关闭', () => box.close()));
     }
   } finally { if (!workspace) await local.close().catch(report); }
@@ -207,6 +208,8 @@ async function saveStatus() {
   let pendingBlobs: Awaited<ReturnType<LocalPersistence['blobs']>> = [];
   try { pendingBlobs = await active.local.blobs(active.epoch, true); }
   catch { state = 'storage-error'; }
+  if (active.blobs.hasStorageFailure) state = 'storage-error';
+  else if (pendingBlobs.length && state === 'cloud') state = active.blobs.uploading ? 'syncing' : 'local';
   if (workspace !== active) return;
   const label = root.querySelector('#save-status');
   if (label) { label.textContent = labels[state] + (pendingBlobs.length ? '，有附件待上传' : ''); label.setAttribute('data-state', pendingBlobs.length && state === 'cloud' ? 'local' : state); }
@@ -218,6 +221,7 @@ async function saveStatus() {
   root.querySelector<HTMLButtonElement>('#delete-doc')!.hidden = active.member.role !== 'manage';
   root.querySelector<HTMLDivElement>('#management')!.hidden = active.member.role !== 'manage';
   root.querySelector<HTMLButtonElement>('#reopen-cloud')!.hidden = current?.sync.state !== 'blocked';
+  root.querySelector<HTMLButtonElement>('#add-attachment')!.disabled = !current || !canEdit(active.member.role) || current.sync.isBlocked || current.sync.hasStorageFailure;
   renderPresence();
 }
 function updatePanel() {
@@ -258,7 +262,7 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   workspace.changed = () => { renderDocuments(); void saveStatus().catch(report); };
   workspace.cacheCatalog();
   cacheSession(session);
-  root.innerHTML = `<aside class="sidebar"><div class="brand">pageTogether</div><p id="member-name"></p><div id="online-members" aria-label="当前文档在线成员" role="status"></div><button id="new-doc" class="new-doc">＋ 新建文档</button><nav id="documents" aria-label="文档"></nav><div id="management"></div><div id="local-tools"></div><p id="notice" role="alert"></p></aside><main class="main"><header class="toolbar"><div class="mode-tabs"><button id="page-mode" aria-pressed="true">正文</button><button id="edgeless-mode" aria-pressed="false">画板</button></div><div class="panel-tools"><button id="outline-panel">大纲</button><button id="frame-panel">画框</button><button id="adapter-panel">导入导出</button></div><span id="save-status" role="status">正在加载</span></header><div class="work-area"><div id="editor-region" class="editor-region"></div><aside id="panel-region" class="native-panel" hidden><div class="panel-heading"><span>原生面板</span><button id="close-panel">关闭</button></div><div id="panel-content"></div></aside></div><footer><button id="delete-doc">移入回收站</button><button id="retry-save">重试本机保存</button><button id="reopen-cloud" hidden>保留离线稿并读取云端</button><button id="logout">退出空间</button></footer></main>`;
+  root.innerHTML = `<aside class="sidebar"><div class="brand">pageTogether</div><p id="member-name"></p><div id="online-members" aria-label="当前文档在线成员" role="status"></div><button id="new-doc" class="new-doc">＋ 新建文档</button><nav id="documents" aria-label="文档"></nav><div id="management"></div><div id="local-tools"></div><p id="notice" role="alert"></p></aside><main class="main"><header class="toolbar"><div class="mode-tabs"><button id="page-mode" aria-pressed="true">正文</button><button id="edgeless-mode" aria-pressed="false">画板</button></div><div class="panel-tools"><button id="outline-panel">大纲</button><button id="frame-panel">画框</button><button id="adapter-panel">导入导出</button></div><span id="save-status" role="status">正在加载</span></header><div class="work-area"><div id="editor-region" class="editor-region"></div><aside id="panel-region" class="native-panel" hidden><div class="panel-heading"><span>原生面板</span><button id="close-panel">关闭</button></div><div id="panel-content"></div></aside></div><footer><button id="add-attachment">添加附件</button><input id="attachment-files" type="file" multiple hidden><button id="delete-doc">移入回收站</button><button id="retry-save">重试本机保存</button><button id="reopen-cloud" hidden>保留离线稿并读取云端</button><button id="logout">退出空间</button></footer></main>`;
   root.querySelector('#member-name')!.textContent = session.member.nickname;
   editor = new EditorView(); root.querySelector('#editor-region')!.append(editor);
   workspace.slots.docListUpdated.subscribe(renderDocuments);
@@ -285,7 +289,16 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   for (const kind of ['outline', 'frame', 'adapter'] as const) root.querySelector<HTMLButtonElement>('#' + kind + '-panel')!.onclick = () => { panelKind = kind; root.querySelector<HTMLDivElement>('#panel-region')!.hidden = false; updatePanel(); };
   root.querySelector<HTMLButtonElement>('#close-panel')!.onclick = () => { panelKind = undefined; root.querySelector<HTMLDivElement>('#panel-region')!.hidden = true; root.querySelector('#panel-content')!.replaceChildren(); };
   root.querySelector<HTMLButtonElement>('#delete-doc')!.onclick = () => { if (current) { try { workspace!.removeDoc(current.id); } catch (error) { report(error); } } };
-  root.querySelector<HTMLButtonElement>('#retry-save')!.onclick = () => { for (const doc of workspace!.docs.values()) if (doc.loaded || doc.ready || doc.sync.state !== 'loading') void doc.sync.retryLocalSave(); void workspace!.blobs.flush(); };
+  root.querySelector<HTMLButtonElement>('#add-attachment')!.onclick = () => root.querySelector<HTMLInputElement>('#attachment-files')!.click();
+  root.querySelector<HTMLInputElement>('#attachment-files')!.onchange = event => {
+    const input = event.target as HTMLInputElement, files = [...input.files ?? []], active = workspace, doc = current; input.value = '';
+    if (!active || !doc) return;
+    void (async () => { for (const file of files) await active.addAttachment(doc, file); })().catch(report);
+  };
+  root.querySelector<HTMLButtonElement>('#retry-save')!.onclick = () => {
+    for (const doc of workspace!.docs.values()) if (doc.loaded || doc.ready || doc.sync.state !== 'loading') void doc.sync.retryLocalSave();
+    void workspace!.blobs.retryLocalSave().catch(report);
+  };
   root.querySelector<HTMLButtonElement>('#reopen-cloud')!.onclick = () => {
     const active = workspace, doc = current;
     if (!active || !doc) return;
@@ -302,11 +315,11 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
     }).catch(report);
   };
   root.querySelector<HTMLButtonElement>('#logout')!.onclick = () => {
-    if ([...workspace!.docs.values(), ...workspace!.retired].some(doc => doc.sync.hasStorageFailure)) { report(new Error('本机保存失败，请先重试保存或导出当前修改，并保留页面')); return; }
+    if (workspace!.blobs.hasStorageFailure || [...workspace!.docs.values(), ...workspace!.retired].some(doc => doc.sync.hasStorageFailure)) { report(new Error('本机保存失败，请先重试保存或导出当前修改，并保留页面')); return; }
     api('logout', 'POST').then(() => { localStorage.setItem('page-together-signed-out', 'true'); showLogin('已退出空间，本机离线内容仍保留。'); }).catch(report);
   };
   if (session.member.role === 'manage') root.querySelector('#management')!.append(button('邀请朋友', () => inviteMember()), button('成员管理', members), button('回收站', trash));
-  root.querySelector('#local-tools')!.append(button('查看离线稿与人工合并', () => showDrafts(workspace!, current)), button('导出本机内容与离线稿', exportLocal));
+  root.querySelector('#local-tools')!.append(button('附件与离线缓存', () => showAttachments(workspace!, current)), button('查看离线稿与人工合并', () => showDrafts(workspace!, current)), button('导出本机内容与离线稿', exportLocal));
   renderDocuments();
   const first = workspace.docs.values().next().value;
   if (first) await selectDocument(first);
@@ -331,7 +344,7 @@ async function bootstrap() {
 }
 window.addEventListener('pagehide', () => workspace?.dispose());
 window.addEventListener('beforeunload', event => {
-  if (workspace && [...workspace.docs.values(), ...workspace.retired].some(doc => doc.sync.hasStorageFailure)) { event.preventDefault(); event.returnValue = ''; }
+  if (workspace && (workspace.blobs.hasStorageFailure || [...workspace.docs.values(), ...workspace.retired].some(doc => doc.sync.hasStorageFailure))) { event.preventDefault(); event.returnValue = ''; }
 });
 window.addEventListener('online', () => { if (workspace) { void workspace.refresh().catch(report); void workspace.blobs.flush(); } });
 void bootstrap().catch(error => showLogin(errorMessage(error)));

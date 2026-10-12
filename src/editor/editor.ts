@@ -7,6 +7,7 @@ import {
   DocModeExtension,
   EditorSettingExtension,
   FontConfigExtension,
+  FileSizeLimitProvider,
   ParseDocUrlExtension,
 } from '@blocksuite/affine/shared/services';
 import { BlockStdScope, ShadowlessElement } from '@blocksuite/affine/std';
@@ -15,6 +16,7 @@ import { signal } from '@preact/signals-core';
 import { html } from 'lit';
 import { keyed } from 'lit/directives/keyed.js';
 import { Subscription } from 'rxjs';
+import { MAX_ATTACHMENT_BYTES } from '../../shared/attachments';
 
 const viewManager = new ViewExtensionManager(getInternalViewExtensions());
 const primaryModes = new Map<string, DocMode>();
@@ -78,6 +80,7 @@ export class EditorView extends ShadowlessElement {
       store,
       extensions: [...viewManager.get(mode), ...common],
     });
+    this.scope.get(FileSizeLimitProvider).maxFileSize = MAX_ATTACHMENT_BYTES;
     this.referenceSubscription = this.scope
       .get(RefNodeSlotsProvider)
       .docLinkClicked.subscribe(({ pageId }) => {

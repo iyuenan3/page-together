@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import * as Y from 'yjs';
 import { canEdit, type DocumentInfo, type DocumentScope, type Member, type Role } from '../shared/protocol.js';
 import { ApiError, identifier, requireThat, text } from './errors.js';
+import type { BlobWriteContext } from '../shared/attachments.js';
 
 export const hash = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(32).toString('base64url');
@@ -286,9 +287,14 @@ export class Store {
     this.authenticate(sessionHash);
     return (this.db.prepare('SELECT key FROM blobs').all() as { key: string }[]).map(row => row.key);
   }
-  commitBlob(sessionHash: string, key: string, size: number, digest: string) {
+  authorizeBlobWrite(sessionHash: string, context: BlobWriteContext) {
+    const member = this.authenticate(sessionHash);
+    requireThat(member.id === context.memberId && member.accessRevision === context.accessRevision, 409, 'access_changed');
+    this.authorizeDocument(sessionHash, context, true);
+  }
+  commitBlob(sessionHash: string, key: string, size: number, digest: string, context: BlobWriteContext) {
     return this.transaction(() => {
-      requireThat(canEdit(this.authenticate(sessionHash).role), 403, 'read_only');
+      this.authorizeBlobWrite(sessionHash, context);
       const old = this.db.prepare('SELECT hash FROM blobs WHERE key=?').get(key) as { hash: string } | undefined;
       if (old) { requireThat(old.hash === digest, 409, 'blob_conflict'); return; }
       const total = (this.db.prepare('SELECT coalesce(sum(size),0) AS total FROM blobs').get() as { total: number }).total;
