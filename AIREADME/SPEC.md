@@ -8,7 +8,7 @@
 
 邀请和恢复码只在兑换时提交，数据库只存摘要。HTTPS 会话为 __Host-pt_session，HttpOnly、Secure、SameSite=Strict、Path=/；回环 HTTP 测试使用 pt_session。写请求和 WebSocket 必须匹配配置 Origin，不接受跨源写入或 CORS。
 
-JSON 请求上限 16 KiB，失败返回 HTTP 状态和 {code}，不返回内部异常。资源 ID 仅接受字母、数字、下划线和连字符。成员为 {id,nickname,role,owner,active}，role 为 manage/edit/view。
+JSON 请求上限 16 KiB，失败返回 HTTP 状态和 {code}，不返回内部异常。资源 ID 仅接受字母、数字、下划线和连字符。成员为 {id,nickname,role,owner,active,accessRevision}，role 为 manage/edit/view。accessRevision 从 0 开始，角色或活跃资格实际变化时递增；恢复会话不重置该值，无变化的角色保存不递增。该字段补充协议 v1 的成员信息，不能作为客户端认证凭据。
 
 | 接口 | 行为与权限 |
 |---|---|
@@ -42,7 +42,7 @@ JSON 请求上限 16 KiB，失败返回 HTTP 状态和 {code}，不返回内部�
 - 客户端核对作用域和摘要，只删除该请求包含的待发记录。重复 Yjs 更新可安全重试，不重复推进修订号。
 - catalog 提示重新读取目录；错误为 {v:1,type:error,requestId?,code}。数据库提交失败不发 saved 或广播，不污染后续拉取结果。
 
-权限或会话失效关闭连接，文档删除或代际改变关闭旧订阅。典型错误为 session_expired、read_only、space_epoch_changed、document_deleted、document_generation_changed、storage_unavailable；客户端保留离线稿，网络或存储服务故障重试，身份或生命周期异常暂停上传。
+权限版本或会话失效关闭连接，文档删除或代际改变关闭旧订阅。典型错误为 session_expired、read_only、space_epoch_changed、document_deleted、document_generation_changed、storage_unavailable；客户端保留离线稿，网络或存储服务故障重试，身份或生命周期异常暂停上传。暂停跨刷新及身份恢复生效；有待发修改且授权版本变化或缺失时不自动上传，即使当前角色已恢复编辑。
 
 Awareness 暂未进行网络传输。当前每个已打开文档持有独立连接，连接数保护不能解释为已通过 10 人多文档容量验收。
 
@@ -56,6 +56,6 @@ server:admin 支持 init、backup、restore。初始化无公网入口；备份�
 
 ## 验证边界
 
-集成测试覆盖独立会话的增量合并、失败提交、重试、权限、生命周期、附件与备份恢复，以及保存确认后 SIGKILL 并以新进程读回。独立 Chrome 与内置 Chromium 覆盖正文双向实时同步、基础画板图形交换、离线修改与刷新、正常重连合并、查看权限和降权离线稿阻断，以及恢复后的无缓存新代际加载。远端选择、本机保存失败注入、完整原生格式和正式容量仍待验收；权限与重启步骤的具体边界见 EDITOR_CAPABILITIES、CHANGELOG。
+集成测试覆盖独立会话的增量合并、失败提交、重试、权限、生命周期、附件与备份恢复，以及保存确认后 SIGKILL 并以新进程读回。另覆盖真实 HTTP 会话过期后的客户端暂停、授权历史变化、本机隔离事务和 IndexedDB 升级。独立 Chrome 与内置 Chromium 的协同、异常离线稿、旧备份恢复及正常重连回归见 EDITOR_CAPABILITIES。过期使用服务端可控时钟触发，验证服务端过期核验；未测试真实等待 30 天后的浏览器 Cookie 清除。远端选择、本机保存失败注入、完整原生格式和正式容量仍待验收。
 
 权限矩阵、身份恢复和离线重连的产品行为以 PRD 为准，组件与数据流见 ARCHITECTURE。

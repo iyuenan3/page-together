@@ -38,6 +38,10 @@ HTTP、WebSocket 与附件访问共用权威成员和权限状态，成员角色
 
 浏览器持久层按成员、空间和文档代际隔离缓存；重连前保存完整离线稿，身份切换、降权或代际变化时停止自动上传。每次核验当前成员后，同步更新原生 Store 的只读状态和本机身份元数据，离线重开沿用最后核实的角色；缓存中不存认证凭据。已有缓存时先加载本机内容，无缓存时先等待首轮同步再挂载原生编辑器。删除或恢复时保留旧 Doc 的离线导出，并使用新代际打开恢复内容。
 
+依据 ADR-011，成员资格历史由服务端权限版本表达；SQLite 采用增列迁移，不重建成员数据。IndexedDB 升级到版本 2，新增按文档作用域保存的授权版本与暂停原因。异常暂停不能靠刷新或恢复会话消除；无授权记录的旧待发队列保留并暂停。用户明确重新读取云端时，在同一本机事务中先保存完整旧稿，再隔离原队列和缓存，以新的 Y.Doc 读取云端；旧内存和草稿继续可导出。旧空间代际的正文及附件可一并导出。离线附件记录产生时的权限版本，身份失效后暂停或授权版本不匹配的附件保留供导出，不自动上传。
+
+本机回归使用 fake-indexeddb 6.2.5 测试实际持久层代码，另由真实 HTTP 过期测试驱动 DocumentSync；该依赖仅用于开发测试。浏览器持久保存与恢复效果仍以独立浏览器操作和实际导出文件为证据。
+
 Awareness 当前仅保留本机状态，远端光标和在线成员传输待实现。独立双浏览器的正文、基础画板图形、离线重连和降权已有行为证据，具体边界见 EDITOR_CAPABILITIES；原生全部格式往返、附件浏览器流程、本机存储失败注入和真实容量仍待验收。应用资源缓存暂不自动清理旧版本，需补齐可控资源回收与存储压力验证。
 
 公开依据：[SQLite WAL](https://www.sqlite.org/wal.html)、[同步强度](https://www.sqlite.org/pragma.html#pragma_synchronous)、[better-sqlite3](https://github.com/WiseLibs/better-sqlite3/releases/tag/v13.0.3)、[ws 鉴权示例](https://github.com/websockets/ws#client-authentication)、[Yjs 更新接口](https://docs.yjs.dev/api/document-updates)。具体已实现接口和验证结果随代码同步 SPEC、CHANGELOG。
