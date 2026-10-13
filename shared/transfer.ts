@@ -83,9 +83,13 @@ export function prepareTextSnapshot(block: SnapshotBlock) {
   }
   block.children.forEach(prepareTextSnapshot);
 }
-/** Only native document-reference fields change; text, cells and canvas IDs stay intact. */
+/** Remap document references and query row document prefixes, preserving their cell values. */
 export function remapDocumentReferences(block: SnapshotBlock, ids: Map<string, string>) {
   if (['affine:embed-linked-doc', 'affine:embed-synced-doc', 'affine:surface-ref'].includes(block.flavour) && typeof block.props.pageId === 'string') block.props.pageId = ids.get(block.props.pageId) ?? block.props.pageId;
+  if (block.flavour === 'affine:data-view' && block.props.cells && typeof block.props.cells === 'object') {
+    const key = (row: string) => { const slash = row.indexOf('/'); return slash < 0 ? row : (ids.get(row.slice(0, slash)) ?? row.slice(0, slash)) + row.slice(slash); };
+    block.props.cells = Object.fromEntries(Object.entries(block.props.cells).map(([id, cells]) => [key(id), cells]));
+  }
   const walk = (value: unknown) => {
     if (!value || typeof value !== 'object') return;
     if (Array.isArray(value)) { value.forEach(walk); return; }

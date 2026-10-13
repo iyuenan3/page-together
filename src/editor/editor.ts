@@ -24,6 +24,8 @@ import { MAX_ATTACHMENT_BYTES } from '../../shared/attachments';
 import { documentReferenceFromUrl, documentUrl, referenceParams, type DocumentReferenceParams } from '../../shared/document-links';
 import { CompleteFileDropExtension } from './file-drop-extension';
 import { PdfEmbedExtension } from './pdf-embed-extension';
+import { WorkspaceDataViewExtension } from './workspace-data-view';
+import { FontStatusExtension } from './font-status';
 
 const viewManager = new ViewExtensionManager(getInternalViewExtensions());
 const primaryModes = new Map<string, DocMode>();
@@ -36,6 +38,22 @@ export class EditorView extends ShadowlessElement {
   private scope?: BlockStdScope;
   private referenceSubscription?: Subscription;
   private navigation = 0;
+  private fonts = { total: 0, loaded: 0, failed: 0 };
+
+  constructor() {
+    super();
+    this.addEventListener('font-status', event => {
+      if (!this.scope || event.target !== this.scope.host) return;
+      this.fonts = (event as CustomEvent<typeof this.fonts>).detail;
+      // A standard scope render creates a new host. Updating the badge must not
+      // remount that host and restart the font loader in a feedback loop.
+      const badge = this.querySelector('.canvas-font-status');
+      if (badge) {
+        badge.setAttribute('data-loaded', String(this.fonts.loaded)); badge.setAttribute('data-total', String(this.fonts.total));
+        badge.textContent = this.fontLabel();
+      }
+    });
+  }
 
   setContext(store: Store, mode: DocMode, refreshReferences = false) {
     if (this.store === store && this.mode === mode && !refreshReferences) return;
@@ -81,8 +99,9 @@ export class EditorView extends ShadowlessElement {
     ];
     this.scope = new BlockStdScope({
       store,
-      extensions: [...viewManager.get(mode), ...common, CompleteFileDropExtension, PdfEmbedExtension],
+      extensions: [...viewManager.get(mode), ...common, CompleteFileDropExtension, PdfEmbedExtension, WorkspaceDataViewExtension, FontStatusExtension],
     });
+    this.fonts = { total: 0, loaded: 0, failed: 0 };
     this.scope.get(FileSizeLimitProvider).maxFileSize = MAX_ATTACHMENT_BYTES;
     this.referenceSubscription = this.scope
       .get(RefNodeSlotsProvider)
@@ -96,6 +115,7 @@ export class EditorView extends ShadowlessElement {
   get std() {
     return this.scope;
   }
+  private fontLabel() { return this.fonts.failed ? '部分字体未加载，可能显示备用字体' : this.fonts.total && this.fonts.loaded === this.fonts.total ? '7 种原生字体已加载' : '正在加载原生字体'; }
   async focusReference(value: DocumentReferenceParams) {
     const scope = this.scope, navigation = ++this.navigation, params = referenceParams(value);
     await this.updateComplete;
@@ -105,6 +125,21 @@ export class EditorView extends ShadowlessElement {
     await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     if (scope !== this.scope || navigation !== this.navigation || !this.isConnected) return;
     const mode = this.mode;
+    if (params.databaseRowId) {
+      const row = scope.store.getModelById(params.databaseRowId);
+      const database = params.databaseId ? scope.store.getModelById(params.databaseId) : row && scope.store.getParent(row);
+      if (!row || database?.flavour !== 'affine:database' || scope.store.getParent(row)?.id !== database.id) return false;
+      const component = scope.view.getBlock(database.id);
+      await component?.updateComplete;
+      const renderer = component?.querySelector('affine-data-view-renderer');
+      if (!renderer) return false;
+      const manager = renderer.logic.config.dataSource.viewManager;
+      const view = manager.currentView$.value;
+      if (!view) return false;
+      scope.selection.set([new HighlightSelection({ mode, blockIds: [database.id] })]);
+      renderer.openDetailPanel({ view, rowId: row.id });
+      return true;
+    }
     const ids = mode === 'edgeless' ? params.elementIds ?? params.blockIds : params.blockIds;
     const id = ids?.[0] ?? params.databaseRowId ?? params.databaseId;
     if (id) {
@@ -140,6 +175,9 @@ export class EditorView extends ShadowlessElement {
           <div class=${page ? 'page-editor' : 'edgeless-editor-container'}>
             ${this.scope.render()}
           </div>
+          ${page ? null : html`<span class="canvas-font-status" role="status" aria-label="原生字体" data-loaded=${this.fonts.loaded} data-total=${this.fonts.total}>
+            ${this.fontLabel()}
+          </span>`}
         </div>
       `
     );

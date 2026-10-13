@@ -21,6 +21,11 @@ export interface DocumentScope {
   epoch: string;
   generation: number;
 }
+export interface DocumentRead extends DocumentScope {
+  update: string;
+  revision: number;
+  member: Member;
+}
 export type ClientMessage = DocumentScope & {
   v: 1;
   requestId: string;

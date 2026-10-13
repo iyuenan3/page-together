@@ -6,6 +6,12 @@ import { zipSync } from 'fflate';
 import { documentIdFromUrl } from '../shared/document-links.js';
 import { packTransfer, prepareTextSnapshot, relativeTransferPath, remapDocumentReferences, TRANSFER_LIMITS, unpackTransfer } from '../shared/transfer.js';
 
+test('native query annotations follow imported source documents without changing block IDs', () => {
+  const block = { flavour: 'affine:data-view', props: { cells: { 'old-doc/todo': { priority: { columnId: 'priority', value: 0 } }, 'external/todo': { priority: 4 } } }, children: [] };
+  remapDocumentReferences(block, new Map([['old-doc', 'new-doc']]));
+  assert.deepEqual(block.props.cells, { 'new-doc/todo': { priority: { columnId: 'priority', value: 0 } }, 'external/todo': { priority: 4 } });
+});
+
 test('native exported routes and query links select only documents on this origin', () => {
   assert.equal(documentIdFromUrl('https://example.test/workspace/main/doc-a', 'https://example.test'), 'doc-a');
   assert.equal(documentIdFromUrl('/?doc=doc-b', 'https://example.test'), 'doc-b');

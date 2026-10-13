@@ -1,5 +1,5 @@
 import * as Y from 'yjs';
-import type { DocumentScope, ServerMessage } from '../../shared/protocol.js';
+import type { DocumentRead, DocumentScope, ServerMessage } from '../../shared/protocol.js';
 import { canEdit } from '../../shared/protocol.js';
 import { LocalPersistence } from './local.js';
 import { api, RequestError } from './api.js';
@@ -24,6 +24,8 @@ export class DocumentSync {
   private readonly remoteOrigin = {};
   private initial = true;
   private draftIds = '';
+  private queryCached = false;
+  queryRevision?: number;
   private firstSync?: { resolve: () => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
   state: SaveState = 'loading';
   reason = '';
@@ -87,6 +89,37 @@ export class DocumentSync {
     }) : undefined;
     void this.connect();
     await ready;
+  }
+  /** Read unopened query sources without opening a collaboration socket or uploading drafts. */
+  async readQuery(online: boolean) {
+    await this.sequence;
+    if (this.stopped || this.blocked) throw new Error('来源文档已暂停同步');
+    if (!this.queryCached) {
+      const reason = await this.local.checkAccess(this.scope, this.accessRevision);
+      const cached = await this.local.load(this.scope);
+      if (reason) { await this.block(reason); throw new Error(reason); }
+      if (cached) Y.applyUpdate(this.doc, cached, this.remoteOrigin);
+      if (!online && !cached) throw new Error('来源文档尚未缓存');
+      this.queryCached = true;
+    }
+    if (!online) return;
+    try {
+      const result = await api<DocumentRead>(`documents/${this.scope.docId}/state?epoch=${encodeURIComponent(this.scope.epoch)}&generation=${this.scope.generation}`);
+      if (this.stopped || this.blocked) throw new Error('来源文档已暂停同步');
+      if (result.member.id !== this.local.memberId || result.docId !== this.scope.docId || result.epoch !== this.scope.epoch || result.generation !== this.scope.generation) throw new RequestError(409, 'query_scope_changed');
+      this.onAccess(result.member);
+      const reason = await this.local.checkAccess(this.scope, result.member.accessRevision);
+      if (reason) { await this.block(reason); throw new Error(reason); }
+      this.accessRevision = result.member.accessRevision;
+      Y.applyUpdate(this.doc, fromBase64(result.update), this.remoteOrigin);
+      await this.sequence;
+      if (this.localFailed) throw new Error('来源文档本机保存失败');
+      this.queryRevision = result.revision;
+      if (!(await this.local.pending(this.scope)).length) this.setState('cloud');
+    } catch (error) {
+      if (error instanceof RequestError && [401, 403, 409].includes(error.status)) await this.block('来源文档的身份、权限或恢复状态已变化，离线稿保留', error.status !== 409);
+      throw error;
+    }
   }
   private failInitial(reason: string) {
     if (!this.firstSync) return;

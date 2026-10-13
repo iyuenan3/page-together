@@ -3,6 +3,7 @@
  */
 export const nativeFilterGroupPath = '/@blocksuite/data-view/src/widget-presets/quick-setting-bar/filter/group-panel-view.ts';
 export const nativeNumberCellPath = '/@blocksuite/data-view/src/property-presets/number/cell-renderer.ts';
+export const nativeLinkCellPath = '/@blocksuite/affine-block-database/src/properties/link/cell-renderer.ts';
 
 function replaceOnce(source: string, before: string, after: string) {
   if (source.split(before).length !== 2) throw new Error('BlockSuite filter compatibility source changed; review the pinned version before building');
@@ -56,4 +57,9 @@ export function patchNativeNumberCell(source: string, version: string): string {
   return replaceOnce(result, `this._inputEle.value = this.value
           ?`, `this._inputEle.value = this.value != undefined
           ?`);
+}
+
+export function patchNativeLinkCell(source: string, version: string): string {
+  if (version !== '0.22.4') throw new Error('Review native link compatibility before upgrading BlockSuite');
+  return replaceOnce(source, '      pageId: this.docId$.value,\n      host: std.host,', '      pageId: this.docId$.value,\n      params: this.parseDocUrl(this.value ?? \'\'),\n      host: std.host,');
 }

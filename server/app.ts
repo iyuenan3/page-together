@@ -242,6 +242,14 @@ export function createApp(options: AppOptions) {
     if (document && req.method === 'POST' && document[2]) {
       store.lifecycle(session, document[1], document[2] === 'restore'); catalogChanged(); json(res, 200, {}); return;
     }
+    const state = path.match(/^\/api\/documents\/([a-zA-Z0-9_-]+)\/state$/);
+    if (state && req.method === 'GET') {
+      const generation = Number(url.searchParams.get('generation'));
+      requireThat(Number.isSafeInteger(generation) && generation > 0, 400, 'invalid_generation');
+      const scope = { docId: state[1], epoch: text(url.searchParams.get('epoch'), 128), generation };
+      const result = store.pull(session, scope, new Uint8Array([0]));
+      json(res, 200, { ...scope, update: encode(result.update), revision: result.revision, member }); return;
+    }
     if (path === '/api/blobs' && req.method === 'GET') { json(res, 200, store.listBlobs(session)); return; }
     const blob = path.match(/^\/api\/blobs\/([^/]+)$/);
     if (blob) {

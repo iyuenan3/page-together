@@ -9,6 +9,7 @@ import {
 import { BlobEngine } from '@blocksuite/affine/sync';
 import { FeatureFlagService, WriterInfoServiceExtension } from '@blocksuite/affine/shared/services';
 import { Subject } from 'rxjs';
+import { signal } from '@preact/signals-core';
 import { Awareness } from 'y-protocols/awareness.js';
 import * as Y from 'yjs';
 import { canEdit, type DocumentInfo, type Member } from '../../shared/protocol';
@@ -96,7 +97,7 @@ export class ProductionDoc implements Doc {
     const store = this.container.getStore({ ...options, id: options.id ?? this.id, readonly: options.readonly ?? !canEdit(this.workspace.member.role), extensions: [...this.workspace.extensions, ...options.extensions ?? [],
       WriterInfoServiceExtension({ getWriterInfo: () => this.importingSnapshot ? null : { id: this.workspace.member.id, name: this.workspace.member.nickname } })] });
     const flags = store.get(FeatureFlagService);
-    for (const flag of ['enable_advanced_block_visibility', 'enable_callout', 'enable_database_number_formatting'] as const) if (!flags.getFlag(flag)) flags.setFlag(flag, true);
+    for (const flag of ['enable_advanced_block_visibility', 'enable_callout', 'enable_database_number_formatting', 'enable_block_query'] as const) if (!flags.getFlag(flag)) flags.setFlag(flag, true);
     this.stores.add(store); return store;
   }
   async importSnapshot<T>(apply: () => Promise<T>) {
@@ -116,6 +117,11 @@ export class ProductionDoc implements Doc {
 }
 
 export class ProductionWorkspace implements Workspace {
+  private queryUsers = 0;
+  private queryTimer?: ReturnType<typeof setTimeout>;
+  private querying = false;
+  private disposed = false;
+  readonly queryState = signal('正在读取待办来源');
   private pendingCreations = new Set<string>();
   private catalog = new CatalogRefresh(() => api<DocumentInfo[]>('documents'), records => this.applyCatalog(records));
   readonly id = 'main';
@@ -156,6 +162,46 @@ export class ProductionWorkspace implements Workspace {
     this.cacheCatalog(); this.slots.docListUpdated.next(); return doc;
   }
   getDoc(id: string) { return this.docs.get(id) ?? null; }
+  watchQueries() {
+    this.queryUsers++;
+    void this.refreshQueries();
+    return () => { if (--this.queryUsers === 0) clearTimeout(this.queryTimer); };
+  }
+  async editQuerySource(id: string, change: (store: Store) => void) {
+    if (navigator.onLine) {
+      const session = await api<{ member: Member; epoch: string }>('session');
+      if (session.member.id !== this.member.id || session.epoch !== this.epoch) throw new Error('请先恢复当前成员身份');
+      this.updateAccess(session.member); await this.refresh();
+    }
+    const doc = this.docs.get(id);
+    if (!doc || !canEdit(this.member.role)) throw new Error('来源已删除或当前没有编辑权限');
+    await doc.prepare(); await doc.sync.settled();
+    const reason = await this.local.checkAccess(doc.sync.scope, this.member.accessRevision);
+    if (reason || this.docs.get(id) !== doc || doc.sync.isBlocked || doc.sync.hasStorageFailure || !canEdit(this.member.role)) throw new Error(reason || '来源状态已变化，请保留离线稿并重新核验');
+    const store = doc.getStore(); store.captureSync(); change(store);
+    await doc.sync.settled();
+  }
+  private async refreshQueries() {
+    if (this.querying || this.disposed || !this.queryUsers) return;
+    this.querying = true; clearTimeout(this.queryTimer);
+    let unavailable = 0;
+    const online = navigator.onLine;
+    try {
+      if (online) await this.refresh();
+      for (const doc of this.docs.values()) {
+        if (this.disposed || !this.queryUsers) return;
+        if (online && doc.sync.queryRevision === doc.record.revision && !doc.sync.isBlocked) continue;
+        try { await doc.sync.readQuery(online); } catch { unavailable++; }
+      }
+      this.queryState.value = online
+        ? unavailable ? `${unavailable} 篇来源暂时无法读取，汇总可能不完整` : `已核对 ${this.docs.size} 篇文档的待办`
+        : '离线汇总仅包含此设备已缓存且仍可读取的文档';
+    } catch { this.queryState.value = '来源核验暂时失败，汇总可能不完整，请联网后重试'; }
+    finally {
+      this.querying = false;
+      if (!this.disposed && this.queryUsers) this.queryTimer = setTimeout(() => void this.refreshQueries(), 3000);
+    }
+  }
   updateAccess(member: Member) {
     this.member = member;
     for (const doc of this.docs.values()) { doc.setReadonly(!canEdit(member.role)); doc.sync.presence?.identity(member); }
@@ -265,6 +311,7 @@ export class ProductionWorkspace implements Workspace {
     catch { this.report(new Error('本机目录保存失败')); }
   }
   dispose() {
+    this.disposed = true; clearTimeout(this.queryTimer);
     this.blobs.dispose();
     const docs = [...this.docs.values(), ...this.retired];
     for (const doc of docs) doc.dispose();
