@@ -27,6 +27,7 @@ import { PdfEmbedExtension } from './pdf-embed-extension';
 import { WorkspaceDataViewExtension } from './workspace-data-view';
 import { FontStatusExtension } from './font-status';
 import './data-view-image';
+import { VisualExportExtension } from './visual-export';
 
 const viewManager = new ViewExtensionManager(getInternalViewExtensions());
 const primaryModes = new Map<string, DocMode>();
@@ -100,7 +101,7 @@ export class EditorView extends ShadowlessElement {
     ];
     this.scope = new BlockStdScope({
       store,
-      extensions: [...viewManager.get(mode), ...common, CompleteFileDropExtension, PdfEmbedExtension, WorkspaceDataViewExtension, FontStatusExtension],
+      extensions: [...viewManager.get(mode), ...common, CompleteFileDropExtension, PdfEmbedExtension, WorkspaceDataViewExtension, FontStatusExtension, VisualExportExtension],
     });
     this.fonts = { total: 0, loaded: 0, failed: 0 };
     this.scope.get(FileSizeLimitProvider).maxFileSize = MAX_ATTACHMENT_BYTES;

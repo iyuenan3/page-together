@@ -4,7 +4,7 @@ import { TRANSFER_LIMITS, packTransfer, prepareTextSnapshot, relativeTransferPat
 import { canEdit } from '../../shared/protocol';
 import type { ProductionDoc, ProductionWorkspace } from './workspace';
 import { attachmentKey } from './blobs';
-import { ExportManager } from '@blocksuite/affine/blocks/surface';
+import { captureVisualExport } from '../editor/visual-export';
 import type { BlockStdScope } from '@blocksuite/affine/std';
 
 const utf8 = new TextEncoder(), text = new TextDecoder('utf-8', { fatal: true });
@@ -167,23 +167,30 @@ async function importFiles(workspace: ProductionWorkspace, current: ProductionDo
   } finally { job[Symbol.dispose](); }
 }
 function countBlocks(block: BlockSnapshot): number { return 1 + block.children.reduce((sum, child) => sum + countBlocks(child), 0); }
-type TransferOperation = { busy: boolean; message: string; views: Set<() => void> };
+type TransferOperation = { busy: boolean; message: string; views: Set<() => void>; download?: { name: string; data: Blob; label: string } };
 const operations = new WeakMap<ProductionWorkspace, TransferOperation>();
 export function transferPanel(workspace: ProductionWorkspace, doc: ProductionDoc, open: (doc: ProductionDoc) => Promise<void>, scope: BlockStdScope) {
   const section = document.createElement('section'); section.className = 'transfer-controls';
   const note = document.createElement('p'); note.textContent = 'Markdown、HTML、文本用于内容交换，复杂块和附件可能无法完整保留。原生 ZIP 保留数据视图、画板、附件和包内文档引用。导入会创建新文档。';
   const status = document.createElement('p'); status.setAttribute('role', 'status');
-  const operation = operations.get(workspace) ?? { busy: false, message: '', views: new Set<() => void>() };
+  const download = document.createElement('a'); download.href = '#'; download.hidden = true;
+  const operation: TransferOperation = operations.get(workspace) ?? { busy: false, message: '', views: new Set<() => void>() };
   operations.set(workspace, operation);
-  const update = () => { section.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.disabled = operation.busy); status.textContent = operation.message; };
+  download.onclick = event => {
+    const file = operation.download;
+    if (!file || operation.busy) { event.preventDefault(); return; }
+    const url = URL.createObjectURL(file.data); download.href = url; download.download = file.name;
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const update = () => { section.querySelectorAll<HTMLButtonElement>('button').forEach(button => button.disabled = operation.busy); status.textContent = operation.message; download.hidden = !operation.download; download.textContent = operation.download ? `${operation.download.label}：${operation.download.name}` : ''; };
   const notify = () => { for (const view of operation.views) view(); };
   // Catalog changes can replace this panel while an import is running.
   const render = () => { if (section.isConnected) update(); else operation.views.delete(render); };
   operation.views.add(render);
   const run = async (action: () => Promise<void>) => {
     if (operation.busy) return;
-    operation.busy = true; operation.message = '正在处理'; notify();
-    try { await action(); operation.message = '操作已结束，请查看浏览器下载或顶部保存状态。'; }
+    operation.busy = true; operation.download = undefined; operation.message = '正在处理'; notify();
+    try { await action(); operation.message = operation.download ? '文件已生成，请点击下方下载。' : '操作已结束，请查看浏览器下载或顶部保存状态。'; }
     catch (error) { operation.message = error instanceof Error ? error.message : '处理未完成，请保留页面后重试'; }
     finally { operation.busy = false; notify(); }
   };
@@ -193,8 +200,9 @@ export function transferPanel(workspace: ProductionWorkspace, doc: ProductionDoc
   const input = document.createElement('input'); input.type = 'file'; input.accept = '.md,.markdown,.html,.htm,.txt,.json,.zip'; input.hidden = true;
   input.onchange = () => { const file = input.files?.[0]; input.value = ''; if (file) void run(async () => { const imported = await importFiles(workspace, doc, file, notion.checked); await open(imported[0]); }); };
   section.append(note, action('导出 Markdown', () => exportText(workspace, doc, 'md')), action('导出 HTML', () => exportText(workspace, doc, 'html')), action('导出文本', () => exportText(workspace, doc, 'txt')), action('导出当前原生 ZIP', () => exportNative(workspace, [doc])), action('导出空间原生 ZIP', () => exportNative(workspace, [...workspace.docs.values()])), notionLabel, action('选择文件导入', async () => { input.click(); }), input, status);
-  section.insertBefore(action('导出 PNG', () => scope.get(ExportManager).exportPng()), notionLabel);
-  section.insertBefore(action('导出 PDF', () => scope.get(ExportManager).exportPdf()), notionLabel);
+  section.insertBefore(action('导出 PNG', async () => { operation.download = await captureVisualExport(scope, 'png'); }), notionLabel);
+  section.insertBefore(action('导出 PDF', async () => { operation.download = await captureVisualExport(scope, 'pdf'); }), notionLabel);
+  section.append(download);
   update();
   return section;
 }
