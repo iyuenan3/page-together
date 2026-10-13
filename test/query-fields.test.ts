@@ -122,7 +122,7 @@ test('actual native image renderer leaves missing values empty and preserves sup
   };
   const patched = patchNativeImageCell(raw, '0.22.4');
   for (const value of [null, undefined, '']) { assert.match(run(raw, value), /<img/); assert.equal(run(patched, value), ''); }
-  for (const value of ['data:image/png;base64,synthetic', 'https://example.test/image.png']) assert.equal(run(patched, value), run(raw, value));
+  for (const value of ['data:image/png;base64,synthetic', 'https://example.test/image.png']) assert.equal(run(patched, value), `<page-together-data-view-image .source=${value}></page-together-data-view-image>`);
   assert.throws(() => patchNativeImageCell(raw, '0.23.0'), /upgrading/);
   assert.throws(() => patchNativeImageCell(raw.replace('this.value ??', 'this.value ||'), '0.22.4'), /source changed/);
 });
@@ -139,8 +139,8 @@ test('actual native desktop kanban renders its hidden image cover while keeping 
   const patched = patchNativeKanbanCover(raw, '0.22.4');
   assert.doesNotMatch(run(raw, 'data:image/png;base64,synthetic'), /<img/);
   const rendered = run(patched, 'data:image/png;base64,synthetic');
-  assert.match(rendered, /src=data:image\/png;base64,synthetic/); assert.match(rendered, /Task title/); assert.match(rendered, /Task icon/); assert.match(rendered, /draggable="false"/);
-  for (const value of [null, undefined, '', 123]) assert.doesNotMatch(run(patched, value), /<img/);
+  assert.match(rendered, /\.source=data:image\/png;base64,synthetic/); assert.match(rendered, /Task title/); assert.match(rendered, /Task icon/); assert.match(rendered, /\.cover=true/);
+  for (const value of [null, undefined, '', 123]) assert.doesNotMatch(run(patched, value), /<page-together-data-view-image/);
   assert.throws(() => patchNativeKanbanCover(raw, '0.23.0'), /upgrading/);
   assert.throws(() => patchNativeKanbanCover(raw.replace('renderHeader(columns:', 'renderHeader(fields:'), '0.22.4'), /source changed/);
 });

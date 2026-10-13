@@ -8,6 +8,7 @@ export const nativeTableManagerPath = '/@blocksuite/data-view/src/view-presets/t
 export const nativeKanbanManagerPath = '/@blocksuite/data-view/src/view-presets/kanban/kanban-view-manager.ts';
 export const nativeImageCellPath = '/@blocksuite/data-view/src/property-presets/image/cell-renderer.ts';
 export const nativeKanbanCardPath = '/@blocksuite/data-view/src/view-presets/kanban/pc/card.ts';
+export const nativePropertyConvertsPath = '/@blocksuite/affine-block-database/src/properties/converts.ts';
 
 function replaceOnce(source: string, before: string, after: string) {
   if (source.split(before).length !== 2) throw new Error('BlockSuite data view compatibility source changed; review the pinned version before building');
@@ -75,11 +76,18 @@ export function patchNativeHiddenFilters(source: string, version: string): strin
 
 export function patchNativeImageCell(source: string, version: string): string {
   if (version !== '0.22.4') throw new Error('Review empty-image rendering before upgrading BlockSuite');
-  return replaceOnce(source, "return html`<img src=${this.value ?? ''}></img>`;", "return this.value ? html`<img src=${this.value}></img>` : html``;");
+  return replaceOnce(source, "return html`<img src=${this.value ?? ''}></img>`;", "return this.value ? html`<page-together-data-view-image .source=${this.value}></page-together-data-view-image>` : html``;");
 }
 
 export function patchNativeKanbanCover(source: string, version: string): string {
   if (version !== '0.22.4') throw new Error('Review kanban image covers before upgrading BlockSuite');
   source = replaceOnce(source, '  private renderHeader(columns: KanbanColumn[]) {', '  private renderHeader(columns: KanbanColumn[]) {\n    const cover = this.view.getHeaderCover(this.cardId);\n    const image = cover?.cellGetOrCreate(this.cardId).value$.value;');
-  return replaceOnce(source, '      <div class="${classList}">${this.renderTitle()} ${this.renderIcon()}</div>', '      ${typeof image === \'string\' && image ? html`<img class="page-together-kanban-cover" src=${image} alt="图片封面" draggable="false" style="display:block;width:100%;max-height:160px;object-fit:contain">` : html``}\n      <div class="${classList}">${this.renderTitle()} ${this.renderIcon()}</div>');
+  return replaceOnce(source, '      <div class="${classList}">${this.renderTitle()} ${this.renderIcon()}</div>', '      ${typeof image === \'string\' && image ? html`<page-together-data-view-image class="page-together-kanban-cover" .source=${image} .cover=${true} style="display:block;width:100%"></page-together-data-view-image>` : html``}\n      <div class="${classList}">${this.renderTitle()} ${this.renderIcon()}</div>');
+}
+
+export function patchNativePropertyConverts(source: string, version: string): string {
+  if (version !== '0.22.4') throw new Error('Review property conversion compatibility before upgrading BlockSuite');
+  const before = 'const options: Record<string, SelectTag> = {};';
+  if (source.split(before).length !== 3) throw new Error('BlockSuite property conversion source changed; review the pinned version before building');
+  return source.replaceAll(before, 'const options: Record<string, SelectTag> = Object.create(null);');
 }

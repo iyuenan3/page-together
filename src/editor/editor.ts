@@ -26,6 +26,7 @@ import { CompleteFileDropExtension } from './file-drop-extension';
 import { PdfEmbedExtension } from './pdf-embed-extension';
 import { WorkspaceDataViewExtension } from './workspace-data-view';
 import { FontStatusExtension } from './font-status';
+import './data-view-image';
 
 const viewManager = new ViewExtensionManager(getInternalViewExtensions());
 const primaryModes = new Map<string, DocMode>();

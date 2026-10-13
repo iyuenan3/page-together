@@ -1,5 +1,5 @@
 import { CaptionedBlockComponent } from '@blocksuite/affine/components/caption';
-import { addProperty, DatabaseBlockDataSource, DatabaseSelection } from '@blocksuite/affine/blocks/database';
+import { addProperty, databasePropertyConverts, DatabaseBlockDataSource, DatabaseSelection, updateCells, updateProperty } from '@blocksuite/affine/blocks/database';
 import type { DataViewBlockModel } from '@blocksuite/affine/blocks/data-view';
 import type { DatabaseBlockModel, ListBlockModel } from '@blocksuite/affine/model';
 import { createIdentifier } from '@blocksuite/affine/global/di';
@@ -124,6 +124,30 @@ export class WorkspaceTodoSource extends DatabaseBlockDataSource {
   override rowMove(id: string, position: InsertToPosition) {
     const view = this.viewManager.currentView$.value;
     if (!this.readonly$.value && view instanceof QueryTableView) view.moveRow(id, position);
+  }
+  override propertyTypeSet(id: string, toType: string) {
+    if (this.readonly$.value || this.isFixedProperty(id)) return;
+    const currentType = this.propertyTypeGet(id), meta = this.propertyMetaGet(toType);
+    if (!currentType || currentType === toType || !meta) return;
+    // A source may be cold or in the trash. Its saved cells must use the new
+    // schema too, so restoring it cannot revive values in the previous type.
+    const rows = [...new Set([...this.rows$.value, ...Object.keys(this.query.props.cells)])];
+    const values = rows.map(row => {
+      if (this.row(row)) return this.cellValueGet(row, id);
+      const cell = this.query.props.cells[row]?.[id];
+      return cell != null && typeof cell === 'object' && 'columnId' in cell ? ('value' in cell ? cell.value : undefined) : cell;
+    });
+    const convert = databasePropertyConverts.find(item => item.from === currentType && item.to === toType)?.convert;
+    const result = convert?.(this.propertyDataGet(id) as never, values as never) ?? {
+      property: meta.config.propertyData.default(), cells: values.map(() => undefined),
+    };
+    const cells: Record<string, unknown> = Object.create(null);
+    rows.forEach((row, index) => { if (values[index] != null || result.cells[index] != null) cells[row] = result.cells[index]; });
+    this.doc.captureSync();
+    this.doc.transact(() => {
+      updateProperty(this.query as unknown as DatabaseBlockModel, id, () => ({ type: toType, data: result.property }));
+      updateCells(this.query as unknown as DatabaseBlockModel, id, cells);
+    });
   }
   override propertyDuplicate(id: string) {
     if (this.readonly$.value || this.isFixedProperty(id)) return;

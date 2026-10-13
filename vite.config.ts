@@ -7,9 +7,9 @@ import { blockSuiteRuntimeImports } from './scripts/blocksuite-runtime-imports.m
 import { pdfAssets } from './scripts/pdf-assets.mjs';
 import {
   nativeFilterGroupPath, nativeNumberCellPath, nativeLinkCellPath, nativeTableManagerPath,
-  nativeKanbanManagerPath, nativeImageCellPath, nativeKanbanCardPath,
+  nativeKanbanManagerPath, nativeImageCellPath, nativeKanbanCardPath, nativePropertyConvertsPath,
   patchNativeFilterGroups, patchNativeNumberCell, patchNativeLinkCell,
-  patchNativeHiddenFilters, patchNativeImageCell, patchNativeKanbanCover,
+  patchNativeHiddenFilters, patchNativeImageCell, patchNativeKanbanCover, patchNativePropertyConverts,
 } from './scripts/native-data-view-compatibility';
 
 const nativePatches = [
@@ -17,6 +17,7 @@ const nativePatches = [
   [nativeLinkCellPath, patchNativeLinkCell], [nativeTableManagerPath, patchNativeHiddenFilters],
   [nativeKanbanManagerPath, patchNativeHiddenFilters], [nativeImageCellPath, patchNativeImageCell],
   [nativeKanbanCardPath, patchNativeKanbanCover],
+  [nativePropertyConvertsPath, patchNativePropertyConverts],
 ] as const;
 
 const packageDirectory = new URL('./node_modules/@blocksuite/', import.meta.url);
