@@ -13,7 +13,7 @@ import { signal } from '@preact/signals-core';
 import { Awareness } from 'y-protocols/awareness.js';
 import * as Y from 'yjs';
 import { canEdit, type DocumentInfo, type Member } from '../../shared/protocol';
-import { api } from './api';
+import { api, RequestError } from './api';
 import { LocalPersistence, type CachedBlob } from './local';
 import { DocumentSync } from './sync';
 import { CatalogRefresh } from './catalog';
@@ -186,16 +186,22 @@ export class ProductionWorkspace implements Workspace {
     this.querying = true; clearTimeout(this.queryTimer);
     let unavailable = 0;
     const online = navigator.onLine;
+    let cachedOnly = !online;
     try {
-      if (online) await this.refresh();
+      if (online) try { await this.refresh(); } catch (error) {
+        if (error instanceof RequestError && [401, 403, 409].includes(error.status)) throw error;
+        // An available network interface does not mean this server is reachable.
+        // Read only locally authorized caches when catalog verification fails.
+        cachedOnly = true;
+      }
       for (const doc of this.docs.values()) {
         if (this.disposed || !this.queryUsers) return;
-        if (online && doc.sync.queryRevision === doc.record.revision && !doc.sync.isBlocked) continue;
-        try { await doc.sync.readQuery(online); } catch { unavailable++; }
+        if (!cachedOnly && doc.sync.queryRevision === doc.record.revision && !doc.sync.isBlocked) continue;
+        try { await doc.sync.readQuery(!cachedOnly); } catch { unavailable++; }
       }
-      this.queryState.value = online
+      this.queryState.value = !cachedOnly
         ? unavailable ? `${unavailable} 篇来源暂时无法读取，汇总可能不完整` : `已核对 ${this.docs.size} 篇文档的待办`
-        : '离线汇总仅包含此设备已缓存且仍可读取的文档';
+        : online ? '来源核验暂时失败，当前仅显示本机已缓存且仍可读取的文档' : '离线汇总仅包含此设备已缓存且仍可读取的文档';
     } catch { this.queryState.value = '来源核验暂时失败，汇总可能不完整，请联网后重试'; }
     finally {
       this.querying = false;

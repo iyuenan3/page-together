@@ -4,9 +4,13 @@
 export const nativeFilterGroupPath = '/@blocksuite/data-view/src/widget-presets/quick-setting-bar/filter/group-panel-view.ts';
 export const nativeNumberCellPath = '/@blocksuite/data-view/src/property-presets/number/cell-renderer.ts';
 export const nativeLinkCellPath = '/@blocksuite/affine-block-database/src/properties/link/cell-renderer.ts';
+export const nativeTableManagerPath = '/@blocksuite/data-view/src/view-presets/table/table-view-manager.ts';
+export const nativeKanbanManagerPath = '/@blocksuite/data-view/src/view-presets/kanban/kanban-view-manager.ts';
+export const nativeImageCellPath = '/@blocksuite/data-view/src/property-presets/image/cell-renderer.ts';
+export const nativeKanbanCardPath = '/@blocksuite/data-view/src/view-presets/kanban/pc/card.ts';
 
 function replaceOnce(source: string, before: string, after: string) {
-  if (source.split(before).length !== 2) throw new Error('BlockSuite filter compatibility source changed; review the pinned version before building');
+  if (source.split(before).length !== 2) throw new Error('BlockSuite data view compatibility source changed; review the pinned version before building');
   return source.replace(before, after);
 }
 
@@ -62,4 +66,20 @@ export function patchNativeNumberCell(source: string, version: string): string {
 export function patchNativeLinkCell(source: string, version: string): string {
   if (version !== '0.22.4') throw new Error('Review native link compatibility before upgrading BlockSuite');
   return replaceOnce(source, '      pageId: this.docId$.value,\n      host: std.host,', '      pageId: this.docId$.value,\n      params: this.parseDocUrl(this.value ?? \'\'),\n      host: std.host,');
+}
+
+export function patchNativeHiddenFilters(source: string, version: string): string {
+  if (version !== '0.22.4') throw new Error('Review hidden-property filtering before upgrading BlockSuite');
+  return replaceOnce(source, 'this.properties$.value.map(column => [', 'this.propertiesRaw$.value.map(column => [');
+}
+
+export function patchNativeImageCell(source: string, version: string): string {
+  if (version !== '0.22.4') throw new Error('Review empty-image rendering before upgrading BlockSuite');
+  return replaceOnce(source, "return html`<img src=${this.value ?? ''}></img>`;", "return this.value ? html`<img src=${this.value}></img>` : html``;");
+}
+
+export function patchNativeKanbanCover(source: string, version: string): string {
+  if (version !== '0.22.4') throw new Error('Review kanban image covers before upgrading BlockSuite');
+  source = replaceOnce(source, '  private renderHeader(columns: KanbanColumn[]) {', '  private renderHeader(columns: KanbanColumn[]) {\n    const cover = this.view.getHeaderCover(this.cardId);\n    const image = cover?.cellGetOrCreate(this.cardId).value$.value;');
+  return replaceOnce(source, '      <div class="${classList}">${this.renderTitle()} ${this.renderIcon()}</div>', '      ${typeof image === \'string\' && image ? html`<img class="page-together-kanban-cover" src=${image} alt="图片封面" draggable="false" style="display:block;width:100%;max-height:160px;object-fit:contain">` : html``}\n      <div class="${classList}">${this.renderTitle()} ${this.renderIcon()}</div>');
 }

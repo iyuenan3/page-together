@@ -5,7 +5,19 @@ import { defineConfig } from 'vite';
 import wasm from 'vite-plugin-wasm';
 import { blockSuiteRuntimeImports } from './scripts/blocksuite-runtime-imports.mjs';
 import { pdfAssets } from './scripts/pdf-assets.mjs';
-import { nativeFilterGroupPath, nativeNumberCellPath, nativeLinkCellPath, patchNativeFilterGroups, patchNativeNumberCell, patchNativeLinkCell } from './scripts/native-data-view-compatibility';
+import {
+  nativeFilterGroupPath, nativeNumberCellPath, nativeLinkCellPath, nativeTableManagerPath,
+  nativeKanbanManagerPath, nativeImageCellPath, nativeKanbanCardPath,
+  patchNativeFilterGroups, patchNativeNumberCell, patchNativeLinkCell,
+  patchNativeHiddenFilters, patchNativeImageCell, patchNativeKanbanCover,
+} from './scripts/native-data-view-compatibility';
+
+const nativePatches = [
+  [nativeFilterGroupPath, patchNativeFilterGroups], [nativeNumberCellPath, patchNativeNumberCell],
+  [nativeLinkCellPath, patchNativeLinkCell], [nativeTableManagerPath, patchNativeHiddenFilters],
+  [nativeKanbanManagerPath, patchNativeHiddenFilters], [nativeImageCellPath, patchNativeImageCell],
+  [nativeKanbanCardPath, patchNativeKanbanCover],
+] as const;
 
 const packageDirectory = new URL('./node_modules/@blocksuite/', import.meta.url);
 const sourcePackages = readdirSync(packageDirectory).filter(name => {
@@ -20,7 +32,7 @@ export default defineConfig({
     name: 'blocksuite-native-data-view-compatibility', enforce: 'pre',
     transform(source, id) {
       const file = id.split('?')[0];
-      const patch = file.endsWith(nativeFilterGroupPath) ? patchNativeFilterGroups : file.endsWith(nativeNumberCellPath) ? patchNativeNumberCell : file.endsWith(nativeLinkCellPath) ? patchNativeLinkCell : undefined;
+      const patch = nativePatches.find(([path]) => file.endsWith(path))?.[1];
       if (!patch) return;
       const { version } = JSON.parse(readFileSync(new URL('data-view/package.json', packageDirectory), 'utf8'));
       return { code: patch(source, version), map: null };

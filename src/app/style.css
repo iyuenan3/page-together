@@ -52,6 +52,8 @@ footer { flex-wrap: wrap; }
 page-together-data-view { display: block; margin: 16px 0; }
 .workspace-query-header { display: grid; gap: 8px; margin-bottom: 12px; }
 .workspace-query-header > div { display: flex; align-items: center; justify-content: space-between; }
+.workspace-query-header data-view-header-views { display: block; flex: 1; min-width: 0; }
+.workspace-query-header data-view-header-tools { flex-shrink: 0; }
 .workspace-query-header > input { border: 0; font-size: 18px; font-weight: 600; }
 .workspace-query-header > p { margin: 0; font-size: 12px; color: #617065; }
 .canvas-font-status { position: absolute; right: 14px; bottom: 82px; padding: 4px 8px; border-radius: 6px; background: #ffffffde; font-size: 12px; color: #617065; pointer-events: none; }
