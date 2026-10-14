@@ -70,7 +70,7 @@ export class EditorView extends ShadowlessElement {
       modeListeners.get(id)?.forEach(listener => listener(value));
     };
     const common: ExtensionType[] = [
-      FontConfigExtension(CommunityCanvasTextFonts),
+      FontConfigExtension([...CommunityCanvasTextFonts, { font: 'pageTogether Han Supplement', weight: '400', style: 'normal', url: '/assets/page-together-han-supplement.woff2' }]),
       EditorSettingExtension({ setting$: signal({}) }),
       ParseDocUrlExtension({
         parseDocUrl: url => {
@@ -117,7 +117,7 @@ export class EditorView extends ShadowlessElement {
   get std() {
     return this.scope;
   }
-  private fontLabel() { return this.fonts.failed ? '部分字体未加载，可能显示备用字体' : this.fonts.total && this.fonts.loaded === this.fonts.total ? '7 种原生字体已加载' : '正在加载原生字体'; }
+  private fontLabel() { return this.fonts.failed ? '部分字体未加载，可能显示备用字体' : this.fonts.total && this.fonts.loaded === this.fonts.total ? this.fonts.total === 30 ? '7 种原生字体和汉字补充字形已加载' : '7 种原生字体已加载' : '正在加载原生字体'; }
   async focusReference(value: DocumentReferenceParams) {
     const scope = this.scope, navigation = ++this.navigation, params = referenceParams(value);
     await this.updateComplete;

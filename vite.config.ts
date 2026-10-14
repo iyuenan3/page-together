@@ -12,6 +12,8 @@ import {
   patchNativeHiddenFilters, patchNativeImageCell, patchNativeKanbanCover, patchNativePropertyConverts,
 } from './scripts/native-data-view-compatibility';
 import { nativeExportManagerPath, nativeFileExporterPath, patchNativeExportManager, patchNativeFileExporter } from './scripts/native-export-compatibility';
+import { nativeFontPath, patchNativeFontFallback } from './scripts/native-font-compatibility';
+import { nativeSurfacePlaceholderPath, patchNativeSurfacePlaceholder } from './scripts/native-reference-compatibility';
 
 const nativePatches = [
   [nativeFilterGroupPath, patchNativeFilterGroups], [nativeNumberCellPath, patchNativeNumberCell],
@@ -20,6 +22,8 @@ const nativePatches = [
   [nativeKanbanCardPath, patchNativeKanbanCover],
   [nativePropertyConvertsPath, patchNativePropertyConverts],
   [nativeExportManagerPath, patchNativeExportManager], [nativeFileExporterPath, patchNativeFileExporter],
+  [nativeFontPath, patchNativeFontFallback],
+  [nativeSurfacePlaceholderPath, patchNativeSurfacePlaceholder],
 ] as const;
 
 const packageDirectory = new URL('./node_modules/@blocksuite/', import.meta.url);

@@ -104,9 +104,14 @@ test('actual native file exporter can be captured without an automatic download 
   exporter.exportFile('test.png', png); assert.equal(clicks, 1); assert.equal(appended, 1);
 });
 
-function managerHarness(options: { images?: string[]; failed?: boolean; font?: Promise<unknown>; styleExtension?: boolean; decode?: (image: any) => Promise<void> } = {}) {
+function managerHarness(options: { images?: string[]; failed?: boolean; font?: Promise<unknown>; hanFont?: Promise<unknown>; styleExtension?: boolean; decode?: (image: any) => Promise<void> } = {}) {
   let reads = 0, native = 0, normalized = 0, fitted = 0, decoded = 0;
-  const host: any = { isConnected: true, querySelectorAll(selector: string) {
+  class Viewport { setBlocksActive() {} setBlocksIdle() {} getModelsInViewport() { return new Set(); } }
+  const viewport = new Viewport();
+  const { withExportBlocks } = evaluate('src/editor/visual-blocks.ts', 'withExportBlocks', {
+    isInsidePageEditor: () => false, GfxViewportElement: Viewport, GfxControllerIdentifier: 'gfx', isGfxBlockComponent: () => false,
+  });
+  const host: any = { isConnected: true, querySelector: () => viewport, querySelectorAll(selector: string) {
     return selector === 'img' ? (options.images ?? []).map(src => ({ src, getClientRects: () => [1] })) : options.failed ? [{ querySelector: () => ({}), getClientRects: () => [1] }] : [];
   } };
   class Native { constructor(readonly std: any) {} get editorHost() { return this.std.host; } async exportPng() { native++; } async exportPdf() { native++; } }
@@ -116,9 +121,9 @@ function managerHarness(options: { images?: string[]; failed?: boolean; font?: P
     fetchVisualImage: async () => { reads++; return new Blob(); }, inlineVisualImage: async () => 'data:inlined',
     normalizeVisualColors: () => { normalized++; }, fitVisualImage: async () => { fitted++; return 'data:fitted'; },
     decodeVisualImage: async (image: { src: string }) => { assert.equal(image.src, 'data:fitted'); decoded++; await options.decode?.(image); },
-    createIdentifier: () => ({}), parseIdentifier: () => ({}), visualExportEvent, visualFile: resources.visualFile,
+    createIdentifier: () => ({}), parseIdentifier: () => ({}), visualExportEvent, visualFile: resources.visualFile, withExportBlocks,
   });
-  const scope = { host, get: () => ({ fontFaces: [{ family: 'Inter', loaded: options.font ?? Promise.resolve() }], elementsBound: {}, getElementsByBound: () => [{ fontFamily: 'Inter' }] }) };
+  const scope = { host, get: () => ({ fontFaces: [{ family: 'Inter', loaded: options.font ?? Promise.resolve() }, { family: 'pageTogether Han Supplement', loaded: options.hanFont ?? Promise.resolve() }], elementsBound: {}, getElementsByBound: (_bound: unknown, filter?: { type: string }) => filter?.type === 'block' ? [] : [{ fontFamily: 'Inter' }], selection: { surfaceSelections: [] }, view: { get: () => undefined } }) };
   host.std = scope;
   return { manager: new VisualExportManager(scope), host, scope, reads: () => reads, native: () => native, normalized: () => normalized, fitted: () => fitted, decoded: () => decoded };
 }
@@ -177,6 +182,14 @@ test('actual export manager blocks failed images, rejected fonts and a replaced 
   await assert.rejects(stale.manager.exportPng(), /页面已变化/); assert.equal(stale.native(), 0);
   const extension = managerHarness({ styleExtension: true });
   await assert.rejects(extension.manager.exportPng(), /样式扩展/); assert.equal(extension.native(), 0);
+});
+
+test('supplementary font failure blocks both formats even when FontFaceSet.ready resolves', async () => {
+  for (const method of ['exportPng', 'exportPdf']) {
+    const h = managerHarness({ hanFont: Promise.reject(new Error('supplement failed')) });
+    await assert.rejects(h.manager[method](), /字体.*加载失败/);
+    assert.equal(h.native(), 0, 'missing supplementary glyphs must not reach the native rasterizer');
+  }
 });
 
 test('modern CSS colors are converted through browser pixels only in the export clone', () => {

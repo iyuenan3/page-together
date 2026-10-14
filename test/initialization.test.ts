@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import * as Y from 'yjs';
+import { hasDocumentHistory } from '../shared/native-document.js';
+import { hash } from '../server/store.js';
+import { fixture, Peer } from './helpers.js';
+
+test('interrupted empty creation initializes atomically once, broadcasts and survives a fresh read', async t => {
+  const f = await fixture(); t.after(f.close);
+  await f.request('/api/documents', f.owner, 'POST', { id: 'interrupted', title: '保留目录标题' });
+  const scope = { docId: 'interrupted', epoch: f.store.epoch, generation: 1 };
+  const peer = new Peer(f.origin, f.owner); t.after(() => peer.close()); await peer.next('ready');
+  peer.send({ v: 1, type: 'open', requestId: 'empty', ...scope, stateVector: 'AA==' }); await peer.next('sync');
+  const responses = await Promise.all(Array.from({ length: 4 }, () => f.request('/api/documents/interrupted/initialize', f.owner, 'POST', { ...scope, accessRevision: 0 })));
+  const values = await Promise.all(responses.map(response => { assert.equal(response.status, 200); return response.json(); }));
+  assert.equal(values.filter(value => value.initialized).length, 1);
+  assert.equal(values.filter(value => value.revision !== 1).length, 0);
+  const broadcast = await peer.next('update'); assert.equal(broadcast.revision, 1);
+  const fresh = new Y.Doc(); t.after(() => fresh.destroy());
+  Y.applyUpdate(fresh, f.store.pull(hash(f.owner.split('=')[1]), scope, Uint8Array.of(0)).update);
+  const blocks = [...fresh.getMap<Y.Map<unknown>>('blocks').values()];
+  assert.equal(blocks.length, 4);
+  const root = blocks.find(block => block.get('sys:flavour') === 'affine:page')!;
+  assert.equal((root.get('prop:title') as Y.Text).toString(), '保留目录标题');
+  const surface = blocks.find(block => block.get('sys:flavour') === 'affine:surface')!;
+  const boxed = surface.get('prop:elements') as Y.Map<unknown>;
+  assert.equal(boxed.get('type'), '$blocksuite:internal:native$'); assert(boxed.get('value') instanceof Y.Map);
+  assert.equal(peer.count('update'), 0, 'idempotent calls never broadcast another initializer');
+});
+
+test('initialization rejects viewers, revoked permissions, old epochs and deleted generations', async t => {
+  const f = await fixture(); t.after(f.close);
+  await f.request('/api/documents', f.owner, 'POST', { id: 'empty', title: '权限' });
+  const view = await f.member('view'), edit = await f.member('edit');
+  const input = { epoch: f.store.epoch, generation: 1, accessRevision: 0 };
+  assert.equal((await f.request('/api/documents/empty/initialize', view.cookie, 'POST', input)).status, 403);
+  await f.request('/api/members/' + edit.member.id, f.owner, 'PATCH', { role: 'edit', active: false });
+  assert.equal((await f.request('/api/documents/empty/initialize', edit.cookie, 'POST', input)).status, 401);
+  assert.equal((await f.request('/api/documents/empty/initialize', f.owner, 'POST', { ...input, accessRevision: 1 })).status, 409);
+  assert.equal((await f.request('/api/documents/empty/initialize', f.owner, 'POST', { ...input, epoch: 'old' })).status, 409);
+  await f.request('/api/documents/empty/trash', f.owner, 'POST');
+  assert.equal((await f.request('/api/documents/empty/initialize', f.owner, 'POST', input)).status, 409);
+  await f.request('/api/documents/empty/restore', f.owner, 'POST');
+  assert.equal((await f.request('/api/documents/empty/initialize', f.owner, 'POST', input)).status, 409);
+  assert.equal((await f.request('/api/documents/empty/initialize', f.owner, 'POST', { ...input, generation: 3 })).status, 200);
+  assert.equal((await f.request('/api/documents/empty/initialize', view.cookie, 'POST', { ...input, generation: 3 })).status, 403);
+});
+
+test('initialization preserves non-native history and tombstones, and rolls back failed SQL', async t => {
+  const f = await fixture(); t.after(f.close);
+  const session = hash(f.owner.split('=')[1]);
+  await f.request('/api/documents', f.owner, 'POST', { id: 'partial', title: '已有内容' });
+  const scope = { docId: 'partial', epoch: f.store.epoch, generation: 1 }, doc = new Y.Doc(); t.after(() => doc.destroy());
+  doc.getText('body').insert(0, '不得覆盖'); f.store.push(session, scope, Y.encodeStateAsUpdate(doc));
+  const before = f.store.pull(session, scope, Uint8Array.of(0));
+  assert.equal((await f.request('/api/documents/partial/initialize', f.owner, 'POST', { ...scope, accessRevision: 0 })).status, 409);
+  assert.deepEqual(f.store.pull(session, scope, Uint8Array.of(0)), before);
+  doc.getText('body').delete(0, doc.getText('body').length);
+  f.store.push(session, scope, Y.encodeStateAsUpdate(doc)); assert(hasDocumentHistory(doc));
+  assert.equal((await f.request('/api/documents/partial/initialize', f.owner, 'POST', { ...scope, accessRevision: 0 })).status, 409);
+  await f.request('/api/documents', f.owner, 'POST', { id: 'sql', title: 'SQL' });
+  f.store.db.exec("CREATE TRIGGER init_fail BEFORE INSERT ON updates BEGIN SELECT RAISE(ABORT, 'test initialization failure'); END");
+  const input = { epoch: f.store.epoch, generation: 1, accessRevision: 0 };
+  assert.equal((await f.request('/api/documents/sql/initialize', f.owner, 'POST', input)).status, 500);
+  const empty = new Y.Doc(); t.after(() => empty.destroy());
+  Y.applyUpdate(empty, f.store.pull(session, { ...scope, docId: 'sql' }, Uint8Array.of(0)).update);
+  assert.equal(hasDocumentHistory(empty), false);
+  f.store.db.exec('DROP TRIGGER init_fail');
+  assert.equal((await f.request('/api/documents/sql/initialize', f.owner, 'POST', input)).status, 200);
+});

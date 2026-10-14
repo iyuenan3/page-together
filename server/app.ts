@@ -10,6 +10,7 @@ import { hash, Store, type StoreOptions } from './store.js';
 import { PresenceRooms } from './presence.js';
 import { MAX_AWARENESS_BYTES } from '../shared/awareness.js';
 import { UPLOAD_CONTEXT_HEADER, type BlobWriteContext } from '../shared/attachments.js';
+import { lockData, recoverBlobFiles } from './blob-recovery.js';
 
 interface AppOptions extends StoreOptions {
   directory: string;
@@ -21,10 +22,17 @@ interface AppOptions extends StoreOptions {
 interface Peer { sessionHash: string; member: Member; subscriptions: Map<string, DocumentScope>; alive: boolean; budget: number; reset: number; leaving?: boolean }
 
 export function createApp(options: AppOptions) {
-  const store = new Store(options.directory, options);
+  const parsedOrigin = new URL(options.origin);
+  requireThat(parsedOrigin.protocol === 'https:' || parsedOrigin.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(parsedOrigin.hostname), 400, 'https_required');
+  requireThat(Number.isSafeInteger(options.maxConnections ?? 40) && (options.maxConnections ?? 40) > 0, 400, 'invalid_configuration');
+  const releaseLock = lockData(options.directory);
+  let store: Store, recovery: ReturnType<typeof recoverBlobFiles>;
+  try { store = new Store(options.directory, options); recovery = recoverBlobFiles(store); }
+  catch (error) { store!?.close(); releaseLock(); throw error; }
   requireThat(Number.isSafeInteger(options.maxConnections ?? 40) && (options.maxConnections ?? 40) > 0, 400, 'invalid_configuration');
   const peers = new Map<WebSocket, Peer>();
   const downloads = new Map<ServerResponse, string>();
+  const requests = new Set<Promise<void>>();
   const attempts = new Map<string, { count: number; until: number }>();
   const blobsDirectory = join(options.directory, 'blobs');
   mkdirSync(blobsDirectory, { recursive: true, mode: 0o700 });
@@ -250,6 +258,21 @@ export function createApp(options: AppOptions) {
       const result = store.pull(session, scope, new Uint8Array([0]));
       json(res, 200, { ...scope, update: encode(result.update), revision: result.revision, member }); return;
     }
+    const initialization = path.match(/^\/api\/documents\/([a-zA-Z0-9_-]+)\/initialize$/);
+    if (initialization && req.method === 'POST') {
+      const data = await body(req);
+      requireThat(Number.isSafeInteger(data.generation) && Number(data.generation) > 0 && Number.isSafeInteger(data.accessRevision) && Number(data.accessRevision) >= 0, 400, 'invalid_initialization');
+      const scope = { docId: initialization[1], epoch: text(data.epoch, 128), generation: Number(data.generation) };
+      const result = store.initializeDocument(session, scope, Number(data.accessRevision));
+      if (result.initialized) {
+        for (const [ws, peer] of peers) if (validPeer(ws, peer)) {
+          const subscription = peer.subscriptions.get(scope.docId);
+          if (subscription?.epoch === scope.epoch && subscription.generation === scope.generation) send(ws, { v: 1, type: 'update', ...scope, update: encode(result.update), revision: result.revision });
+        }
+        catalogChanged();
+      }
+      json(res, 200, { ...scope, update: encode(result.update), revision: result.revision, member, initialized: result.initialized }); return;
+    }
     if (path === '/api/blobs' && req.method === 'GET') { json(res, 200, store.listBlobs(session)); return; }
     const blob = path.match(/^\/api\/blobs\/([^/]+)$/);
     if (blob) {
@@ -271,12 +294,13 @@ export function createApp(options: AppOptions) {
     throw new ApiError(404, 'not_found');
   }
   const server = createServer((req, res) => {
-    handle(req, res).catch(error => {
+    const operation = handle(req, res).catch(error => {
       if (res.headersSent) { res.destroy(); return; }
       const failure = error instanceof ApiError ? error : new ApiError(500, 'internal_error');
       json(res, failure.status, { code: failure.code });
       req.resume();
-    });
+    }).finally(() => requests.delete(operation));
+    requests.add(operation);
   });
   server.requestTimeout = 120_000;
   server.headersTimeout = 15_000;
@@ -351,7 +375,7 @@ export function createApp(options: AppOptions) {
   }, options.heartbeatMs ?? 15_000);
   heartbeat.unref();
   return {
-    server, store,
+    server, store, recovery,
     setOrigin(value: string) {
       const previous = origin;
       origin = new URL(value).origin;
@@ -365,7 +389,8 @@ export function createApp(options: AppOptions) {
       await new Promise<void>(resolve => wss.close(() => resolve()));
       server.closeAllConnections();
       if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-      store.close();
+      await Promise.allSettled(requests);
+      store.close(); releaseLock();
     },
   };
 }

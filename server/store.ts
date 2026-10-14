@@ -6,6 +6,7 @@ import * as Y from 'yjs';
 import { canEdit, type DocumentInfo, type DocumentScope, type Member, type Role } from '../shared/protocol.js';
 import { ApiError, identifier, requireThat, text } from './errors.js';
 import type { BlobWriteContext } from '../shared/attachments.js';
+import { emptyNativeDocument, hasDocumentHistory, nativeRootIds } from '../shared/native-document.js';
 
 export const hash = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const token = () => randomBytes(32).toString('base64url');
@@ -241,6 +242,26 @@ export class Store {
       return doc;
     } catch (error) { doc.destroy(); throw error; }
   }
+  initializeDocument(sessionHash: string, scope: DocumentScope, accessRevision: number) {
+    return this.transaction(() => {
+      this.authorizeDocument(sessionHash, scope, true);
+      const member = this.authenticate(sessionHash);
+      requireThat(member.accessRevision === accessRevision, 409, 'access_changed');
+      const current = this.hydrate(scope.docId);
+      try {
+        if (hasDocumentHistory(current)) {
+          requireThat([...current.getMap<Y.Map<unknown>>('blocks').values()].some(block => block instanceof Y.Map && block.get('sys:flavour') === 'affine:page'), 409, 'document_initialization_conflict');
+          return { ...this.pull(sessionHash, scope, new Uint8Array([0])), initialized: false };
+        }
+        const record = this.authorizeDocument(sessionHash, scope, true);
+        const initial = emptyNativeDocument(record.title, member.id, this.now());
+        try {
+          const update = Y.encodeStateAsUpdate(initial), saved = this.push(sessionHash, scope, update);
+          return { update, revision: saved.revision, initialized: true };
+        } finally { initial.destroy(); }
+      } finally { current.destroy(); }
+    });
+  }
   pull(sessionHash: string, scope: DocumentScope, vector: Uint8Array) {
     const record = this.authorizeDocument(sessionHash, scope);
     const doc = this.hydrate(scope.docId);
@@ -257,6 +278,7 @@ export class Store {
       try {
         const before = Y.encodeStateAsUpdate(doc);
         try { Y.applyUpdate(doc, update); } catch { throw new ApiError(400, 'invalid_update'); }
+        requireThat(nativeRootIds(doc).length <= 1, 409, 'document_root_conflict');
         const after = Y.encodeStateAsUpdate(doc);
         requireThat(after.byteLength <= this.options.maxDocumentBytes, 413, 'document_too_large');
         const updateHash = hash(update);

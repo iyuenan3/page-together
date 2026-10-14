@@ -16,6 +16,7 @@ const app = createApp({
   maxConnections: Number(process.env.PAGETOGETHER_MAX_CONNECTIONS ?? 40),
 });
 const port = Number(process.env.PAGETOGETHER_PORT ?? 3000);
+if (app.recovery.retained) console.warn('Attachment recovery originals are retained; inspect them with the offline recovery command.');
 app.server.listen(port, '127.0.0.1', () => console.log('pageTogether service listening on loopback'));
 let closing = false;
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => {

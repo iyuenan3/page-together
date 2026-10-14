@@ -11,6 +11,10 @@ const notices = [
   'BlockSuite package manifests declare MIT; the upstream repository also retains MPL-2.0 material.',
   'Pinned source: https://github.com/toeverything/blocksuite/tree/a5091e72365a47351f370ca23f212ef43a9d42f0',
 ];
+notices.push('\npageTogether Han Supplement, derived from BabelStone Han 16.0.3',
+  'Source: https://babelstone.co.uk/Fonts/Han.html',
+  'Modified by pageTogether: supplementary CJK subset and renamed font family.',
+  readFileSync(join(root, 'public/assets/HAN-LICENSE.txt'), 'utf8'));
 let count = 0;
 
 for (const [packagePath, dependency] of Object.entries(lock.packages)) {

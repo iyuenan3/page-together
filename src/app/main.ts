@@ -2,7 +2,6 @@ import { AdapterPanel } from '@blocksuite/affine/fragments/adapter-panel';
 import { FramePanel } from '@blocksuite/affine/fragments/frame-panel';
 import { OutlinePanel } from '@blocksuite/affine/fragments/outline';
 import type { DocMode } from '@blocksuite/affine/model';
-import { Text } from '@blocksuite/affine/store';
 import '@toeverything/theme/style.css';
 import 'katex/dist/katex.min.css';
 import * as Y from 'yjs';
@@ -11,6 +10,7 @@ import { documentIdFromUrl, documentReferenceFromUrl, documentUrl, referencePara
 import { EditorView } from '../editor/editor';
 import { api, RequestError } from './api';
 import { LocalPersistence } from './local';
+import { observeApplicationCache } from './application-cache';
 import { toBase64, type SaveState } from './sync';
 import { ProductionWorkspace, type ProductionDoc } from './workspace';
 import { showDrafts } from './drafts';
@@ -240,7 +240,7 @@ function updatePanel() {
 async function selectDocument(doc: ProductionDoc, reference?: DocumentReference, pushHistory = true) {
   const selected = ++selection;
   const active = workspace;
-  await doc.prepare();
+  await doc.ensureInitialized();
   if (selected !== selection || !active || workspace !== active || active.getDoc(doc.id) !== doc) return;
   const store = doc.getStore(); store.load();
   if (!store.root) throw new Error('文档正文尚未初始化，请稍后重新打开或联系管理者');
@@ -288,14 +288,6 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   workspace.slots.docListUpdated.subscribe(renderDocuments);
   root.querySelector<HTMLButtonElement>('#new-doc')!.onclick = () => {
     Promise.resolve().then(() => workspace!.createDoc()).then(async doc => {
-      await doc.prepare();
-      const store = doc.getStore();
-      store.load(() => {
-        const page = store.addBlock('affine:page', { title: new Text('无标题') });
-        store.addBlock('affine:surface', {}, page);
-        const note = store.addBlock('affine:note', {}, page);
-        store.addBlock('affine:paragraph', { text: new Text('') }, note);
-      });
       await selectDocument(doc);
     }).catch(report);
   };
@@ -374,4 +366,7 @@ window.addEventListener('popstate', () => {
   else if (id) report(new Error('引用的文档不存在或已移入回收站'));
 });
 void bootstrap().catch(error => showLogin(errorMessage(error)));
-if (import.meta.env.PROD && 'serviceWorker' in navigator) void navigator.serviceWorker.register('/sw.js').catch(report);
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  observeApplicationCache();
+  void navigator.serviceWorker.register('/sw.js').catch(report);
+}

@@ -6,6 +6,7 @@ import { api, RequestError } from './api.js';
 import type { Member } from '../../shared/protocol.js';
 import { DocumentPresence } from './presence.js';
 import type { Awareness } from 'y-protocols/awareness.js';
+import { createsNativeRoot, nativeRootIds } from '../../shared/native-document.js';
 
 export type SaveState = 'loading' | 'local' | 'syncing' | 'cloud' | 'blocked' | 'storage-error';
 export class DocumentSync {
@@ -22,6 +23,19 @@ export class DocumentSync {
   private retries = 0;
   private inFlight?: { requestId: string; ids: string[]; hash: string; timer: ReturnType<typeof setTimeout> };
   private readonly remoteOrigin = {};
+  private localRootChanged = false;
+  private knownRoots = new Set<string>();
+  private rootsChanged = (events: Y.YEvent<any>[], transaction: Y.Transaction) => {
+    for (const event of events) if (event instanceof Y.YMapEvent) {
+      if (event.target === this.doc.getMap('blocks')) {
+        if (transaction.origin !== this.remoteOrigin && [...event.keysChanged].some(key => {
+          const block = event.target.get(key);
+          return this.knownRoots.has(key) || block instanceof Y.Map && block.get('sys:flavour') === 'affine:page';
+        })) this.localRootChanged = true;
+        this.knownRoots = new Set(nativeRootIds(this.doc));
+      } else if (transaction.origin !== this.remoteOrigin && event.keysChanged.has('sys:flavour') && event.target.get('sys:flavour') === 'affine:page') this.localRootChanged = true;
+    }
+  };
   private initial = true;
   private draftIds = '';
   private queryCached = false;
@@ -50,6 +64,8 @@ export class DocumentSync {
     }).then(reason => {
       if (reason) { this.blocked = true; this.blockedReason = reason; this.setState('blocked', reason); }
     }).catch(() => this.storageFailure());
+    this.knownRoots = new Set(nativeRootIds(doc));
+    this.doc.getMap('blocks').observeDeep(this.rootsChanged);
     this.doc.on('update', this.changed);
     if (awareness) this.presence = new DocumentPresence(awareness, update => {
       if (this.opened && !this.blocked && !this.stopped && this.socket?.readyState === WebSocket.OPEN) this.socket.send(JSON.stringify({ v: 1, type: 'awareness', requestId: crypto.randomUUID(), ...this.scope, update: toBase64(update) }));
@@ -70,6 +86,24 @@ export class DocumentSync {
       .catch(() => this.storageFailure());
     void this.sequence.then(() => this.flush());
   };
+  private async mergeRemote(update: Uint8Array) {
+    if (this.stopped || this.blocked) return false;
+    // Ordinary typing does not clone the document. Native creation/import and
+    // the first reconnect with pending data are the structural conflict window.
+    if (this.localRootChanged || this.initial && (await this.local.pending(this.scope)).length) {
+      const preview = new Y.Doc();
+      try {
+        Y.applyUpdate(preview, Y.encodeStateAsUpdate(this.doc)); Y.applyUpdate(preview, update);
+        if (nativeRootIds(preview).length > 1) {
+          await this.block('文档初始化同时发生，原稿已保留，请读取云端后人工整理');
+          return false;
+        }
+      } finally { preview.destroy(); }
+    }
+    if (this.stopped || this.blocked) return false;
+    Y.applyUpdate(this.doc, update, this.remoteOrigin);
+    return true;
+  }
   async start(waitForRemote = true) {
     await this.sequence;
     if (this.blocked) throw new Error(this.reason);
@@ -111,7 +145,7 @@ export class DocumentSync {
       const reason = await this.local.checkAccess(this.scope, result.member.accessRevision);
       if (reason) { await this.block(reason); throw new Error(reason); }
       this.accessRevision = result.member.accessRevision;
-      Y.applyUpdate(this.doc, fromBase64(result.update), this.remoteOrigin);
+      if (!await this.mergeRemote(fromBase64(result.update))) throw new Error(this.blockedReason);
       await this.sequence;
       if (this.localFailed) throw new Error('来源文档本机保存失败');
       this.queryRevision = result.revision;
@@ -225,7 +259,7 @@ export class DocumentSync {
     } else if (message.type === 'sync') {
       if (message.docId !== this.scope.docId || message.epoch !== this.scope.epoch || message.generation !== this.scope.generation) throw new Error('scope_changed');
       await this.preserveDraft();
-      Y.applyUpdate(this.doc, fromBase64(message.update), this.remoteOrigin);
+      if (!await this.mergeRemote(fromBase64(message.update))) return;
       await this.sequence;
       this.opened = true; this.retries = 0; this.initial = false;
       this.presence?.open();
@@ -233,13 +267,16 @@ export class DocumentSync {
       await this.flush();
     } else if (message.type === 'update') {
       if (message.docId !== this.scope.docId || message.epoch !== this.scope.epoch || message.generation !== this.scope.generation) throw new Error('scope_changed');
-      Y.applyUpdate(this.doc, fromBase64(message.update), this.remoteOrigin);
+      if (!await this.mergeRemote(fromBase64(message.update))) return;
     } else if (message.type === 'saved') {
       const receipt = this.inFlight;
       if (!receipt || message.requestId !== receipt.requestId) return;
       if (message.updateHash !== receipt.hash || message.docId !== this.scope.docId || message.epoch !== this.scope.epoch || message.generation !== this.scope.generation) throw new Error('invalid_receipt');
       clearTimeout(receipt.timer); this.inFlight = undefined;
-      try { await this.local.acknowledge(receipt.ids); } catch { this.storageFailure(); return; }
+      try {
+        await this.local.acknowledge(receipt.ids);
+        this.localRootChanged = (await this.local.pending(this.scope)).some(row => createsNativeRoot(row.update));
+      } catch { this.storageFailure(); return; }
       await this.flush();
     } else if (message.type === 'awareness') {
       if (message.docId !== this.scope.docId || message.epoch !== this.scope.epoch || message.generation !== this.scope.generation) throw new Error('scope_changed');
@@ -248,7 +285,7 @@ export class DocumentSync {
       if (message.code === 'storage_unavailable' || message.code === 'space_paused') {
         socket.close(); return;
       }
-      await this.block('同步已暂停：' + message.code + '。本机修改仍可导出'); socket.close();
+      await this.block(message.code === 'document_root_conflict' ? '文档初始化同时发生，原稿已保留，请读取云端后人工整理' : '同步已暂停：' + message.code + '。本机修改仍可导出'); socket.close();
     } else if (message.type === 'catalog') this.onCatalog();
   }
   private async flush() {
@@ -315,6 +352,7 @@ export class DocumentSync {
     this.socket?.close();
     this.presence?.dispose();
     this.doc.off('update', this.changed);
+    this.doc.getMap('blocks').unobserveDeep(this.rootsChanged);
   }
 }
 export function toBase64(bytes: Uint8Array) {

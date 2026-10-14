@@ -35,6 +35,7 @@ button { font: inherit; cursor: pointer; }
 page-together-editor { display: block; height: 100%; }
 .affine-page-viewport { height: 100%; overflow-y: auto; overflow-x: hidden; position: relative; display: flex; flex-direction: column; container-type: inline-size; container-name: viewport; font-family: var(--affine-font-family); }
 .page-editor { display: block; flex: 1; font-family: var(--affine-font-family); }
+.affine-page-viewport, .affine-edgeless-viewport { --affine-font-family: Inter, "pageTogether Han Supplement", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 /* Native autoPlacement chooses above or below without shrinking tall menus.
    Keep either placement inside the editor's clipped, scrolling viewport. */
 page-together-editor affine-menu { max-height: calc(50% - 24px); overflow-y: auto; }

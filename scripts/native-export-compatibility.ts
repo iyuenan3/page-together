@@ -13,6 +13,7 @@ export function patchNativeExportManager(source: string, version: string) {
   versionCheck(version);
   source = replace(source, 'imageProxyEndpoint: DEFAULT_IMAGE_PROXY_ENDPOINT,', "imageProxyEndpoint: '',");
   source = replace(source, 'if (count > 10 * 60)', 'if (count >= 100)');
+  source = replace(source, '        ctx.drawImage(\n          canvasData,', "        if (!canvasData.width || !canvasData.height) throw new Error('部分画板区块尚未完成显示，导出已停止，请稍后重试，原内容保留。');\n        ctx.drawImage(\n          canvasData,");
   return replace(source, '      await this._checkReady();', "      if (!await this._checkReady()) throw new Error('Export resources are not ready');");
 }
 export function patchNativeFileExporter(source: string, version: string) {

@@ -8,6 +8,7 @@ import type { ExtensionType } from '@blocksuite/affine/store';
 import { visualExportEvent } from '../../scripts/native-export-compatibility';
 import { decodeVisualImage, fetchVisualImage, fitVisualImage, inlineVisualImage, visualFile } from './visual-resources';
 import { normalizeVisualColors } from './visual-colors';
+import { withExportBlocks } from './visual-blocks';
 
 export class VisualExportManager extends ExportManager {
   private readonly images = new Map<string, Promise<string>>();
@@ -26,6 +27,7 @@ export class VisualExportManager extends ExportManager {
     try {
       const faces = this.std.get(FontLoaderService).fontFaces;
       const families = isInsidePageEditor(this.editorHost) ? new Set<string>() : new Set(this.std.get(GfxControllerIdentifier).getElementsByBound(this.std.get(GfxControllerIdentifier).elementsBound).flatMap(model => 'fontFamily' in model && typeof model.fontFamily === 'string' ? [model.fontFamily] : []));
+      families.add('pageTogether Han Supplement');
       await Promise.race([
         Promise.all([document.fonts.ready, ...faces.filter(face => families.has(face.family.replace(/^['"]|['"]$/g, ''))).map(face => face.loaded)]),
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('字体尚未加载完成，请稍后重试导出')), 20_000); }),
@@ -66,11 +68,11 @@ export class VisualExportManager extends ExportManager {
     this.current();
   };
   override async exportPng() {
-    try { await this.prepare(); await super.exportPng(); }
+    try { await withExportBlocks(this.std, async () => { await this.prepare(); await super.exportPng(); }); }
     finally { this.images.clear(); }
   }
   override async exportPdf() {
-    try { await this.prepare(); await super.exportPdf(); }
+    try { await withExportBlocks(this.std, async () => { await this.prepare(); await super.exportPdf(); }); }
     finally { this.images.clear(); }
   }
 }

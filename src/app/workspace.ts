@@ -20,6 +20,7 @@ import { CatalogRefresh } from './catalog';
 import { OfflineBlobSource } from './blobs';
 import { NativeBlobEngine } from '../editor/blob-engine';
 import { ClipboardWhitespaceExtension } from '../editor/clipboard-extension';
+import { hasDocumentHistory } from '../../shared/native-document';
 
 class WorkspaceMetaAdapter implements WorkspaceMeta {
   docMetaAdded = new Subject<string>();
@@ -92,6 +93,18 @@ export class ProductionDoc implements Doc {
   load(init?: () => void) {
     if (!this.ready) { this.ready = true; init?.(); }
     void this.prepare().catch(error => this.workspace.report(error));
+  }
+  async ensureInitialized() {
+    await this.prepare(); await this.sync.settled();
+    if ([...this.yBlocks.values()].some(block => block.get('sys:flavour') === 'affine:page')) return;
+    if (!navigator.onLine || !canEdit(this.workspace.member.role)) throw new Error('文档初始化中断，请联网后由编辑或管理成员重新打开');
+    if (this.sync.isBlocked || this.sync.hasStorageFailure || this.workspace.getDoc(this.id) !== this) throw new Error('请先保留离线稿并核验当前权限和保存状态');
+    // Read the latest authority before deciding whether this is truly empty.
+    await this.sync.readQuery(true); await this.sync.settled();
+    if ([...this.yBlocks.values()].some(block => block.get('sys:flavour') === 'affine:page')) return;
+    if (hasDocumentHistory(this.spaceDoc)) throw new Error('文档已有内容但缺少正文，请保留原稿后人工恢复');
+    await api(`documents/${this.id}/initialize`, 'POST', { ...this.sync.scope, accessRevision: this.workspace.member.accessRevision });
+    await this.sync.readQuery(true); await this.sync.settled();
   }
   getStore(options: GetStoreOptions = {}) {
     const store = this.container.getStore({ ...options, id: options.id ?? this.id, readonly: options.readonly ?? !canEdit(this.workspace.member.role), extensions: [...this.workspace.extensions, ...options.extensions ?? [],
