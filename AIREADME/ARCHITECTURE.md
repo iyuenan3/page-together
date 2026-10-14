@@ -20,6 +20,10 @@ src/editor 共享完整原生编辑器与宿主服务适配。src/app 使用自�
 
 ## 保存与离线边界
 
+依据 ADR-034，shared/content-references 直接遍历原生 Y.Text delta、嵌套 Map 和快照属性，统一盘点脚注中的文档与附件引用。脚注原件的缓存文件名和类型也从相同原生属性读取。ProductionDoc 的附件上传作用域和正文发送前检查、原生 ZIP 原件打包与导入前校验均使用该盘点。导入先将原件交给原生 AssetsManager 写入同一生产 BlobSource，再应用快照，防止脚注正文先取得保存确认。脚注视图通过公开 FootNoteNodeConfigExtension 接入直接徽标、键盘和弹层动作，复用当前文档导航和 BlobEngine；异步下载结束时复核当前编辑器作用域。
+
+src/app/storage-usage 独立观察浏览器存储估算，合并并发查询、设置截止并在退出工作区时移除观察。无法读取时保留最后成功估算，提示来自上次测量，不改变正文、附件或同步队列。估算和实际保存失败分别处理，见 ADR-035、SPEC。
+
 IndexedDB 原子保存合并快照与待发增量；不同标签页的确认只删除对应增量。附件按成员和空间代际缓存，已读附件也保存到本机。构建时生成 Service Worker 预缓存应用、字体和编辑器资源，API 始终直连服务端。实现依据见 [Yjs 离线支持](https://docs.yjs.dev/getting-started/allowing-offline-editing)。
 
 重连数据流为本机草稿准备、当前身份和文档状态核验、获准的 Yjs 更新交换、服务端持久化及保存确认。文档增量同步依据公开 [Yjs 更新接口](https://docs.yjs.dev/api/document-updates)；正常合并与异常保留行为以 PRD 为准。
