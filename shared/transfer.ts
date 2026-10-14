@@ -1,4 +1,5 @@
 import { Unzip, UnzipInflate, zipSync } from 'fflate';
+import { footnoteReferences } from './content-references.js';
 
 export const TRANSFER_LIMITS = { total: 100_000_000, file: 50_000_000, text: 10_000_000, entries: 2000, documents: 100 };
 export function transferPath(name: string) {
@@ -85,6 +86,7 @@ export function prepareTextSnapshot(block: SnapshotBlock) {
 }
 /** Remap document references and query row document prefixes, preserving their cell values. */
 export function remapDocumentReferences(block: SnapshotBlock, ids: Map<string, string>) {
+  for (const reference of footnoteReferences(block.props)) if (reference.type === 'doc' && typeof reference.docId === 'string') reference.docId = ids.get(reference.docId) ?? reference.docId;
   if (['affine:embed-linked-doc', 'affine:embed-synced-doc', 'affine:surface-ref'].includes(block.flavour) && typeof block.props.pageId === 'string') block.props.pageId = ids.get(block.props.pageId) ?? block.props.pageId;
   if (block.flavour === 'affine:data-view') {
     const key = (row: string) => { const slash = row.indexOf('/'); return slash < 0 ? row : (ids.get(row.slice(0, slash)) ?? row.slice(0, slash)) + row.slice(slash); };

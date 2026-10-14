@@ -2,6 +2,7 @@ import { docLinkBaseURLMiddleware, FULL_FILE_PATH_KEY, HtmlAdapter, MarkdownAdap
 import { DocSnapshotSchema, extMimeMap, getAssetName, type BlockSnapshot, type DocSnapshot, type Store, type Transformer, type TransformerMiddleware } from '@blocksuite/affine/store';
 import { TRANSFER_LIMITS, packTransfer, prepareTextSnapshot, relativeTransferPath, remapDocumentReferences, unpackTransfer } from '../../shared/transfer';
 import { canEdit } from '../../shared/protocol';
+import { snapshotAttachmentKeys } from '../../shared/content-references';
 import type { ProductionDoc, ProductionWorkspace } from './workspace';
 import { attachmentKey } from './blobs';
 import { captureVisualExport } from '../editor/visual-export';
@@ -20,10 +21,9 @@ const textSnapshotMiddleware: TransformerMiddleware = ({ slots }) => {
 };
 export function adapterMiddlewares(workspace: ProductionWorkspace, textOnly = false) { return [docLinkBaseURLMiddleware(workspace.id), titleMiddleware(workspace.meta.docMetas), ...textOnly ? [textSnapshotMiddleware] : []]; }
 function getJob(workspace: ProductionWorkspace, store: Store, textOnly = false) { return store.getTransformer(adapterMiddlewares(workspace, textOnly)); }
-function visit(block: BlockSnapshot, action: (block: BlockSnapshot) => void) { action(block); block.children.forEach(child => visit(child, action)); }
 async function assetsFor(job: Transformer, snapshots: DocSnapshot[]) {
   const keys = new Set<string>();
-  for (const snapshot of snapshots) visit(snapshot.blocks, block => { if (typeof block.props.sourceId === 'string' && block.props.sourceId) keys.add(block.props.sourceId); });
+  for (const snapshot of snapshots) for (const key of snapshotAttachmentKeys(snapshot.blocks)) keys.add(key);
   for (const key of keys) {
     await job.assetsManager.readFromBlob(key);
     if (!job.assets.has(key)) throw new Error('有附件无法读取，导出已停止。请恢复附件后重试。');
@@ -146,10 +146,9 @@ async function importFiles(workspace: ProductionWorkspace, current: ProductionDo
       ids.set(snapshot.meta.id, workspace.idGenerator());
     }
     // Validate all assets and snapshots before creating anything on the server.
-    for (const snapshot of snapshots) visit(snapshot.blocks, block => {
-      const key = block.props.sourceId;
-      if (typeof key === 'string' && key && !job.assets.has(key)) throw new Error('导入文件缺少附件，请使用包含附件的 ZIP');
-    });
+    for (const snapshot of snapshots) for (const key of snapshotAttachmentKeys(snapshot.blocks)) {
+      if (!job.assets.has(key)) throw new Error('导入文件缺少附件，请使用包含附件的 ZIP');
+    }
     for (const [key, asset] of job.assets) {
       if (asset.size > TRANSFER_LIMITS.file || await attachmentKey(asset) !== key) throw new Error('导入附件大小或内容校验失败，未创建文档');
     }
@@ -158,6 +157,11 @@ async function importFiles(workspace: ProductionWorkspace, current: ProductionDo
       const doc = workspace.createDoc(ids.get(snapshot.meta.id)!);
       await doc.prepare(); created.push(doc);
       remapDocumentReferences(snapshot.blocks, ids); snapshot.meta.id = doc.id;
+      if (!canEdit(workspace.member.role) || doc.sync.isBlocked) throw new Error('权限或文档状态已变化，导入暂停，已创建内容保留供处理');
+      // Native block transformers write image and attachment cards, but inline
+      // footnotes have no block transformer. Stage their originals before text
+      // can enter the body-save queue, which waits for these blob receipts.
+      for (const key of snapshotAttachmentKeys(snapshot.blocks)) await job.assetsManager.writeToBlob(key);
       if (!canEdit(workspace.member.role) || doc.sync.isBlocked) throw new Error('权限或文档状态已变化，导入暂停，已创建内容保留供处理');
       const result = await doc.importSnapshot(() => job.snapshotToDoc(snapshot));
       if (!result || doc.yBlocks.size !== countBlocks(snapshot.blocks)) throw new Error('导入未完整完成，已创建内容保留，请检查后重试');

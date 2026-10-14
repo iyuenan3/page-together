@@ -19,7 +19,17 @@ writeFileSync('dist/sw.js', `const CACHE=${JSON.stringify(cache)};
 const ASSETS=${JSON.stringify(paths)};
 const FONTS=${JSON.stringify(fonts)};
 const FONT_CACHE='page-together-fonts-blocksuite-0.22.4';
-self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)).then(() => self.skipWaiting())));
+async function installAssets() {
+  const existed = (await caches.keys()).includes(CACHE);
+  const cache = await caches.open(CACHE);
+  try { await cache.addAll(ASSETS); await self.skipWaiting(); }
+  catch (error) {
+    // A quota-failed upgrade must not replace or erase a usable old build.
+    if (!existed) await caches.delete(CACHE);
+    throw error;
+  }
+}
+self.addEventListener('install', event => event.waitUntil(installAssets()));
 self.addEventListener('activate', event => event.waitUntil(self.clients.claim().then(async () => {
   const cache = await caches.open(FONT_CACHE);
   await Promise.allSettled(FONTS.map(async url => {
@@ -42,7 +52,12 @@ function cleanOldAssets() {
       // Legacy, silent or newly opened pages keep every old asset cache intact.
       if (live.some(client => !versions.has(client.id))) return;
       const retained = new Set([CACHE, ...live.map(client => versions.get(client.id))]);
-      const names = (await caches.keys()).filter(name => /^page-together-assets-[a-f0-9]{16}$/.test(name));
+      const names = [];
+      for (const name of await caches.keys()) if (/^page-together-assets-[a-f0-9]{16}$/.test(name)) {
+        // An empty cache may belong to an installing worker. Leave it alone and
+        // do not mistake it for the most recent usable history build.
+        if (await (await caches.open(name)).match('/')) names.push(name);
+      }
       // Keep one prior build for a recently restored history page as well.
       const previous = names.filter(name => name !== CACHE).at(-1); if (previous) retained.add(previous);
       for (const name of names) if (!retained.has(name)) await caches.delete(name);

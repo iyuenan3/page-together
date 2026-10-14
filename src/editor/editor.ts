@@ -1,7 +1,8 @@
 import { ViewExtensionManager } from '@blocksuite/affine/ext-loader';
 import { getInternalViewExtensions } from '@blocksuite/affine/extensions/view';
 import { RefNodeSlotsProvider } from '@blocksuite/affine/inlines/reference';
-import type { DocMode } from '@blocksuite/affine/model';
+import { FootNoteNodeConfigExtension } from '@blocksuite/affine/inlines/footnote';
+import type { DocMode, FootNote } from '@blocksuite/affine/model';
 import { Bound } from '@blocksuite/affine/global/gfx';
 import { HighlightSelection } from '@blocksuite/affine/shared/selection';
 import { GfxControllerIdentifier } from '@blocksuite/affine/std/gfx';
@@ -28,6 +29,7 @@ import { WorkspaceDataViewExtension } from './workspace-data-view';
 import { FontStatusExtension } from './font-status';
 import './data-view-image';
 import { VisualExportExtension } from './visual-export';
+import { openFootnote } from './footnotes';
 
 const viewManager = new ViewExtensionManager(getInternalViewExtensions());
 const primaryModes = new Map<string, DocMode>();
@@ -69,7 +71,29 @@ export class EditorView extends ShadowlessElement {
       primaryModes.set(id, value);
       modeListeners.get(id)?.forEach(listener => listener(value));
     };
+    const followFootnote = (footnote: FootNote, controller: AbortController) => {
+        controller.abort();
+        if (this.store !== store || !this.isConnected) return;
+        void openFootnote(footnote.reference, {
+          baseURL: location.href,
+          openDocument: pageId => this.dispatchEvent(new CustomEvent('doc-change', { detail: { pageId } })),
+          readAttachment: key => store.blobSync.get(key),
+          download: (name, data) => {
+            if (this.store !== store || !this.isConnected) throw new Error('文档已切换，请在当前文档重新下载');
+            const url = URL.createObjectURL(data), link = document.createElement('a');
+            link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+          },
+          openURL: url => { window.open(url, '_blank', 'noopener,noreferrer'); },
+        }).catch(error => this.dispatchEvent(new CustomEvent('editor-error', { detail: error })));
+    };
     const common: ExtensionType[] = [
+      FootNoteNodeConfigExtension({
+        onPopupClick: followFootnote,
+        customNodeRenderer: footnote => html`<span class="footnote-content-default" role=${footnote.reference.type === 'attachment' ? 'button' : 'link'} tabindex="0"
+          aria-label=${footnote.reference.title ?? footnote.reference.fileName ?? `脚注 ${footnote.label}`}
+          @click=${() => followFootnote(footnote, new AbortController())}
+          @keydown=${(event: KeyboardEvent) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); followFootnote(footnote, new AbortController()); } }}>${footnote.label}</span>`,
+      }),
       FontConfigExtension([...CommunityCanvasTextFonts, { font: 'pageTogether Han Supplement', weight: '400', style: 'normal', url: '/assets/page-together-han-supplement.woff2' }]),
       EditorSettingExtension({ setting$: signal({}) }),
       ParseDocUrlExtension({

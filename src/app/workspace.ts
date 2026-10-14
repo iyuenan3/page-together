@@ -21,6 +21,7 @@ import { OfflineBlobSource } from './blobs';
 import { NativeBlobEngine } from '../editor/blob-engine';
 import { ClipboardWhitespaceExtension } from '../editor/clipboard-extension';
 import { hasDocumentHistory } from '../../shared/native-document';
+import { footnoteReferences, nativeAttachmentKeys } from '../../shared/content-references';
 
 class WorkspaceMetaAdapter implements WorkspaceMeta {
   docMetaAdded = new Subject<string>();
@@ -83,7 +84,7 @@ export class ProductionDoc implements Doc {
     this.sync.onCatalog = () => void workspace.refresh().catch(error => workspace.report(error));
   }
   get id() { return this.record.id; }
-  blobKeys() { return new Set([...this.yBlocks.values()].flatMap(block => { const key = block.get('prop:sourceId'); return typeof key === 'string' && key ? [key] : []; })); }
+  blobKeys() { return nativeAttachmentKeys(this.yBlocks); }
   get meta() { return this.workspace.meta.getDocMeta(this.id); }
   prepare() {
     return this.preparation ??= (this.creation ?? Promise.resolve()).then(() => this.sync.start(!this.creation))
@@ -233,6 +234,10 @@ export class ProductionWorkspace implements Workspace {
   blobMetadata(key: string) {
     for (const doc of [...this.docs.values(), ...this.retired]) for (const block of doc.yBlocks.values()) if (block.get('prop:sourceId') === key) {
       const name = block.get('prop:name'), type = block.get('prop:type');
+      return { name: typeof name === 'string' ? name : undefined, type: typeof type === 'string' ? type : undefined };
+    }
+    for (const doc of [...this.docs.values(), ...this.retired]) for (const reference of footnoteReferences(doc.yBlocks)) if (reference.type === 'attachment' && reference.blobId === key) {
+      const name = reference.fileName, type = reference.fileType;
       return { name: typeof name === 'string' ? name : undefined, type: typeof type === 'string' ? type : undefined };
     }
     return {};

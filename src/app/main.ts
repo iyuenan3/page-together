@@ -11,6 +11,7 @@ import { EditorView } from '../editor/editor';
 import { api, RequestError } from './api';
 import { LocalPersistence } from './local';
 import { observeApplicationCache } from './application-cache';
+import { observeStorageUsage } from './storage-usage';
 import { toBase64, type SaveState } from './sync';
 import { ProductionWorkspace, type ProductionDoc } from './workspace';
 import { showDrafts } from './drafts';
@@ -31,6 +32,7 @@ let selection = 0;
 let editor: EditorView | undefined;
 let panelKind: 'outline' | 'frame' | 'adapter' | undefined;
 let syncNotice = '';
+let storageUsage: ReturnType<typeof observeStorageUsage> | undefined;
 
 function download(name: string, data: Blob) {
   const url = URL.createObjectURL(data), link = document.createElement('a');
@@ -103,6 +105,7 @@ async function exportLocal() {
   } finally { if (!workspace) await local.close().catch(report); }
 }
 function showLogin(message = '') {
+  storageUsage?.stop(); storageUsage = undefined;
   workspace?.dispose(); workspace = undefined; current = undefined;
   root.innerHTML = `<main class="login"><div class="brand">pageTogether</div><p>和受邀朋友一起记录、整理和创作</p><form id="invite-form"><h2>通过邀请进入</h2><label>昵称<input name="nickname" required maxlength="80" autocomplete="nickname"></label><label>邀请内容<input name="invitation" required autocomplete="off" spellcheck="false"></label><button type="submit">进入共享空间</button></form><details><summary>所有者恢复访问</summary><form id="recovery-form"><label>离线恢复码<input name="code" type="password" required autocomplete="off"></label><button type="submit">恢复所有者访问</button></form></details><p id="notice" role="alert"></p><div id="local-export"></div></main>`;
   root.querySelector<HTMLInputElement>('[name=invitation]')!.value = invitation;
@@ -262,6 +265,7 @@ function updateModeButtons() {
   root.querySelector('#edgeless-mode')?.setAttribute('aria-pressed', String(mode === 'edgeless'));
 }
 async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
+  storageUsage?.stop(); storageUsage = undefined;
   if (session.paused) {
     workspace?.dispose(); current = undefined;
     root.innerHTML = '<main class="login"><h1>空间恢复维护中</h1><p>请先核对成员资格和恢复结果，再恢复访问。</p><p id="notice" role="alert"></p></main>';
@@ -284,7 +288,9 @@ async function enter(session: Session, offlineRecords?: DocumentInfo[]) {
   cacheSession(session);
   root.innerHTML = `<aside class="sidebar"><div class="brand">pageTogether</div><p id="member-name"></p><div id="online-members" aria-label="当前文档在线成员" role="status"></div><button id="new-doc" class="new-doc">＋ 新建文档</button><nav id="documents" aria-label="文档"></nav><div id="management"></div><div id="local-tools"></div><p id="notice" role="alert"></p></aside><main class="main"><header class="toolbar"><div class="mode-tabs"><button id="page-mode" aria-pressed="true">正文</button><button id="edgeless-mode" aria-pressed="false">画板</button></div><div class="panel-tools"><button id="outline-panel">大纲</button><button id="frame-panel">画框</button><button id="adapter-panel">导入导出</button></div><span id="save-status" role="status">正在加载</span></header><div class="work-area"><div id="editor-region" class="editor-region"></div><aside id="panel-region" class="native-panel" hidden><div class="panel-heading"><span>原生面板</span><button id="close-panel">关闭</button></div><div id="panel-content"></div></aside></div><footer><button id="add-attachment">添加附件</button><input id="attachment-files" type="file" multiple hidden><button id="delete-doc">移入回收站</button><button id="retry-save">重试本机保存</button><button id="reopen-cloud" hidden>保留离线稿并读取云端</button><button id="logout">退出空间</button></footer></main>`;
   root.querySelector('#member-name')!.textContent = session.member.nickname;
+  storageUsage = observeStorageUsage(root.querySelector<HTMLElement>('.sidebar')!);
   editor = new EditorView(); root.querySelector('#editor-region')!.append(editor);
+  editor.addEventListener('editor-error', event => report((event as CustomEvent).detail));
   workspace.slots.docListUpdated.subscribe(renderDocuments);
   root.querySelector<HTMLButtonElement>('#new-doc')!.onclick = () => {
     Promise.resolve().then(() => workspace!.createDoc()).then(async doc => {
@@ -355,7 +361,7 @@ async function bootstrap() {
     showLogin(error instanceof RequestError && error.status === 401 ? '' : errorMessage(error));
   }
 }
-window.addEventListener('pagehide', () => workspace?.dispose());
+window.addEventListener('pagehide', () => { storageUsage?.stop(); workspace?.dispose(); });
 window.addEventListener('beforeunload', event => {
   if (workspace && (workspace.blobs.hasStorageFailure || [...workspace.docs.values(), ...workspace.retired].some(doc => doc.sync.hasStorageFailure))) { event.preventDefault(); event.returnValue = ''; }
 });
